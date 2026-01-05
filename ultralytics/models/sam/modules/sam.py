@@ -1,43 +1,66 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# Ultralytics YOLO 🚀 AGPL-3.0 许可证 - https://ultralytics.com/license
 
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
+# 版权所有 (c) Meta Platforms 公司及其关联公司
+# 保留所有权利
 
-from __future__ import annotations
+"""
+SAM (Segment Anything Model) 模型实现模块
 
-import torch
-import torch.nn.functional as F
-from torch import nn
-from torch.nn.init import trunc_normal_
+本模块包含 SAM、SAM2 和 SAM3 模型的实现，用于图像和视频分割任务。
+SAM 模型能够从图像和输入提示（点、框、掩码等）预测对象掩码。
+SAM2 扩展了 SAM 的功能，增加了基于记忆的视频对象分割能力。
+SAM3 是 SAM2 的进一步改进版本。
+"""
 
-from ultralytics.nn.modules import MLP
-from ultralytics.utils import LOGGER
+from __future__ import annotations  # 支持在类型注解中使用字符串形式的类名
 
-from .blocks import SAM2TwoWayTransformer, TwoWayTransformer
-from .decoders import MaskDecoder, SAM2MaskDecoder
-from .encoders import ImageEncoderViT, PromptEncoder
-from .utils import get_1d_sine_pe, select_closest_cond_frames
+import torch  # PyTorch 深度学习框架
+import torch.nn.functional as F  # PyTorch 函数式接口，提供各种神经网络操作
+from torch import nn  # PyTorch 神经网络模块
+from torch.nn.init import trunc_normal_  # 截断正态分布初始化函数
+
+from ultralytics.nn.modules import MLP  # 多层感知机模块
+from ultralytics.utils import LOGGER  # 日志记录工具
+
+from .blocks import SAM2TwoWayTransformer, TwoWayTransformer  # Transformer 双向注意力块
+from .decoders import MaskDecoder, SAM2MaskDecoder  # 掩码解码器
+from .encoders import ImageEncoderViT, PromptEncoder  # 图像编码器和提示编码器
+from .utils import get_1d_sine_pe, select_closest_cond_frames  # 位置编码和条件帧选择工具函数
 
 # a large negative value as a placeholder score for missing objects
+# 一个大的负值，用作缺失对象的占位符分数
 NO_OBJ_SCORE = -1024.0
 
 
 class SAMModel(nn.Module):
-    """Segment Anything Model (SAM) for object segmentation tasks.
+    """
+    Segment Anything Model (SAM) for object segmentation tasks.
+    分段任意模型（SAM）用于对象分割任务
 
     This class combines image encoders, prompt encoders, and mask decoders to predict object masks from images and input
     prompts.
+    该类结合了图像编码器、提示编码器和掩码解码器，从图像和输入提示中预测对象掩码。
 
     Attributes:
         mask_threshold (float): Threshold value for mask prediction.
+            掩码预测的阈值
         image_encoder (ImageEncoderViT): Backbone for encoding images into embeddings.
+            用于将图像编码为嵌入的主干网络
         prompt_encoder (PromptEncoder): Encoder for various types of input prompts.
+            用于各种类型输入提示的编码器
         mask_decoder (MaskDecoder): Predicts object masks from image and prompt embeddings.
+            从图像和提示嵌入中预测对象掩码
         pixel_mean (torch.Tensor): Mean values for normalizing pixels in the input image.
+            用于归一化输入图像像素的均值
         pixel_std (torch.Tensor): Standard deviation values for normalizing pixels in the input image.
+            用于归一化输入图像像素的标准差
 
     Methods:
         set_imgsz: Set image size to make model compatible with different image sizes.
+            设置图像大小以使模型兼容不同的图像尺寸
 
     Examples:
         >>> image_encoder = ImageEncoderViT(...)
@@ -45,12 +68,14 @@ class SAMModel(nn.Module):
         >>> mask_decoder = MaskDecoder(...)
         >>> sam_model = SAMModel(image_encoder, prompt_encoder, mask_decoder)
         >>> # Further usage depends on SAMPredictor class
+        >>> # 进一步使用依赖于 SAMPredictor 类
 
     Notes:
         All forward() operations are implemented in the SAMPredictor class.
+        所有 forward() 操作都在 SAMPredictor 类中实现。
     """
 
-    mask_threshold: float = 0.0
+    mask_threshold: float = 0.0  # 掩码阈值，用于二值化掩码预测
 
     def __init__(
         self,
@@ -60,39 +85,59 @@ class SAMModel(nn.Module):
         pixel_mean: list[float] = (123.675, 116.28, 103.53),
         pixel_std: list[float] = (58.395, 57.12, 57.375),
     ) -> None:
-        """Initialize the SAMModel class to predict object masks from an image and input prompts.
+        """
+        Initialize the SAMModel class to predict object masks from an image and input prompts.
+        初始化 SAMModel 类，从图像和输入提示中预测对象掩码
 
         Args:
             image_encoder (ImageEncoderViT): The backbone used to encode the image into image embeddings.
+                用于将图像编码为图像嵌入的主干网络
             prompt_encoder (PromptEncoder): Encodes various types of input prompts.
+                编码各种类型的输入提示
             mask_decoder (MaskDecoder): Predicts masks from the image embeddings and encoded prompts.
+                从图像嵌入和编码提示中预测掩码
             pixel_mean (list[float]): Mean values for normalizing pixels in the input image.
+                用于归一化输入图像像素的均值
             pixel_std (list[float]): Standard deviation values for normalizing pixels in the input image.
+                用于归一化输入图像像素的标准差
 
         Notes:
             All forward() operations moved to SAMPredictor.
+            所有 forward() 操作都移至 SAMPredictor。
         """
         super().__init__()
-        self.image_encoder = image_encoder
-        self.prompt_encoder = prompt_encoder
-        self.mask_decoder = mask_decoder
+        self.image_encoder = image_encoder  # 图像编码器
+        self.prompt_encoder = prompt_encoder  # 提示编码器
+        self.mask_decoder = mask_decoder  # 掩码解码器
+        # 注册像素均值为缓冲区（不作为模型参数）
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
+        # 注册像素标准差为缓冲区（不作为模型参数）
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
 
     def set_imgsz(self, imgsz):
-        """Set image size to make model compatible with different image sizes."""
+        """
+        Set image size to make model compatible with different image sizes.
+        设置图像大小以使模型兼容不同的图像尺寸
+        """
+        # 如果图像编码器有 set_imgsz 方法，则调用它
         if hasattr(self.image_encoder, "set_imgsz"):
             self.image_encoder.set_imgsz(imgsz)
+        # 设置提示编码器的输入图像大小
         self.prompt_encoder.input_image_size = imgsz
+        # 设置提示编码器的图像嵌入大小（16 是 ViT 模型的固定 patch 大小）
         self.prompt_encoder.image_embedding_size = [x // 16 for x in imgsz]  # 16 is fixed as patch size of ViT model
+        # 设置图像编码器的图像大小
         self.image_encoder.img_size = imgsz[0]
 
 
 class SAM2Model(torch.nn.Module):
-    """SAM2Model class for Segment Anything Model 2 with memory-based video object segmentation capabilities.
+    """
+    SAM2Model class for Segment Anything Model 2 with memory-based video object segmentation capabilities.
+    SAM2Model 类，用于具有基于记忆的视频对象分割能力的 Segment Anything Model 2
 
     This class extends the functionality of SAM to handle video sequences, incorporating memory mechanisms for temporal
     consistency and efficient tracking of objects across frames.
+    该类扩展了 SAM 的功能以处理视频序列，结合记忆机制实现时序一致性和对象的高效跨帧跟踪。
 
     Attributes:
         mask_threshold (float): Threshold value for mask prediction.
@@ -158,47 +203,49 @@ class SAM2Model(torch.nn.Module):
         >>> track_results = model.track_step(0, True, features, None, None, None, {})
     """
 
-    mask_threshold: float = 0.0
+    mask_threshold: float = 0.0  # 掩码阈值
 
     def __init__(
         self,
-        image_encoder,
-        memory_attention,
-        memory_encoder,
-        num_maskmem=7,
-        image_size=512,
-        backbone_stride=16,
-        sigmoid_scale_for_mem_enc=1.0,
-        sigmoid_bias_for_mem_enc=0.0,
-        binarize_mask_from_pts_for_mem_enc=False,
-        use_mask_input_as_output_without_sam=False,
-        max_cond_frames_in_attn=-1,
-        directly_add_no_mem_embed=False,
-        use_high_res_features_in_sam=False,
-        multimask_output_in_sam=False,
-        multimask_min_pt_num=1,
-        multimask_max_pt_num=1,
-        multimask_output_for_tracking=False,
-        use_multimask_token_for_obj_ptr: bool = False,
-        iou_prediction_use_sigmoid=False,
-        memory_temporal_stride_for_eval=1,
-        non_overlap_masks_for_mem_enc=False,
-        use_obj_ptrs_in_encoder=False,
-        max_obj_ptrs_in_encoder=16,
-        add_tpos_enc_to_obj_ptrs=True,
-        proj_tpos_enc_in_obj_ptrs=False,
-        use_signed_tpos_enc_to_obj_ptrs=False,
-        only_obj_ptrs_in_the_past_for_eval=False,
-        pred_obj_scores: bool = False,
-        pred_obj_scores_mlp: bool = False,
-        fixed_no_obj_ptr: bool = False,
-        soft_no_obj_ptr: bool = False,
-        use_mlp_for_obj_ptr_proj: bool = False,
-        no_obj_embed_spatial: bool = False,
-        sam_mask_decoder_extra_args=None,
-        compile_image_encoder: bool = False,
+        image_encoder,  # 图像编码器
+        memory_attention,  # 记忆注意力模块
+        memory_encoder,  # 记忆编码器
+        num_maskmem=7,  # 可访问的记忆帧数量
+        image_size=512,  # 输入图像大小
+        backbone_stride=16,  # 主干网络输出步长
+        sigmoid_scale_for_mem_enc=1.0,  # 记忆编码的 sigmoid 缩放因子
+        sigmoid_bias_for_mem_enc=0.0,  # 记忆编码的 sigmoid 偏置因子
+        binarize_mask_from_pts_for_mem_enc=False,  # 是否对来自点击的掩码进行二值化
+        use_mask_input_as_output_without_sam=False,  # 是否直接使用掩码输入而不经过 SAM
+        max_cond_frames_in_attn=-1,  # 记忆注意力中的最大条件帧数
+        directly_add_no_mem_embed=False,  # 是否直接添加无记忆嵌入
+        use_high_res_features_in_sam=False,  # 是否在 SAM 中使用高分辨率特征
+        multimask_output_in_sam=False,  # 是否输出多个掩码
+        multimask_min_pt_num=1,  # 多掩码输出的最小点击数
+        multimask_max_pt_num=1,  # 多掩码输出的最大点击数
+        multimask_output_for_tracking=False,  # 跟踪时是否使用多掩码输出
+        use_multimask_token_for_obj_ptr: bool = False,  # 是否使用多掩码 token 作为对象指针
+        iou_prediction_use_sigmoid=False,  # IoU 预测是否使用 sigmoid
+        memory_temporal_stride_for_eval=1,  # 评估时记忆库的时序步长
+        non_overlap_masks_for_mem_enc=False,  # 记忆编码时是否应用非重叠约束
+        use_obj_ptrs_in_encoder=False,  # 编码器中是否使用对象指针
+        max_obj_ptrs_in_encoder=16,  # 编码器中的最大对象指针数
+        add_tpos_enc_to_obj_ptrs=True,  # 是否向对象指针添加时序位置编码
+        proj_tpos_enc_in_obj_ptrs=False,  # 是否对时序位置编码进行投影
+        use_signed_tpos_enc_to_obj_ptrs=False,  # 是否使用有符号的时序位置编码
+        only_obj_ptrs_in_the_past_for_eval=False,  # 评估时是否只使用过去的对象指针
+        pred_obj_scores: bool = False,  # 是否预测对象分数
+        pred_obj_scores_mlp: bool = False,  # 是否使用 MLP 预测对象分数
+        fixed_no_obj_ptr: bool = False,  # 无对象时是否使用固定指针
+        soft_no_obj_ptr: bool = False,  # 是否使用软无对象指针
+        use_mlp_for_obj_ptr_proj: bool = False,  # 对象指针投影是否使用 MLP
+        no_obj_embed_spatial: bool = False,  # 是否添加空间无对象嵌入
+        sam_mask_decoder_extra_args=None,  # SAM 掩码解码器的额外参数
+        compile_image_encoder: bool = False,  # 是否编译图像编码器
     ):
-        """Initialize the SAM2Model for video object segmentation with memory-based tracking.
+        """
+        Initialize the SAM2Model for video object segmentation with memory-based tracking.
+        初始化 SAM2Model，用于基于记忆跟踪的视频对象分割
 
         Args:
             image_encoder (nn.Module): Visual encoder for extracting image features.

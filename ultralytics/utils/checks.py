@@ -1,141 +1,198 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+Ultralytics 检查函数模块
 
-from __future__ import annotations
+该模块提供了一系列用于环境检查、依赖验证、版本控制和系统兼容性测试的函数。
+这些函数在安装、配置和运行 Ultralytics YOLO 时确保系统满足所有必要的要求。
 
-import ast
-import functools
-import glob
-import inspect
-import math
-import os
-import platform
-import re
-import shutil
-import subprocess
-import time
-from importlib import metadata
-from pathlib import Path
-from types import SimpleNamespace
+主要功能:
+    - 版本检查: 验证包版本是否满足要求
+    - 依赖检查: 检查并安装必需的 Python 包
+    - 系统检查: 验证操作系统、GPU、内存等系统资源
+    - 文件检查: 验证文件大小、格式、路径等
+    - 网络检查: 检查在线状态、下载资源等
+    - YOLO 配置检查: 验证模型配置和参数
 
-import cv2
-import numpy as np
-import torch
+核心函数:
+    - check_version: 检查版本是否满足要求
+    - check_requirements: 检查并安装缺失的依赖
+    - check_imgsz: 验证图像尺寸是否符合步长要求
+    - check_yolo: YOLO 环境的完整检查
+    - check_amp: 检查自动混合精度 (AMP) 功能
+    - check_file: 检查文件是否存在和可访问
+"""
 
+from __future__ import annotations  # 支持 Python 3.7+ 的类型注解
+
+# 标准库导入
+import ast  # 抽象语法树 - 用于安全解析字符串表达式
+import functools  # 函数工具 - 提供 lru_cache 等装饰器
+import glob  # 文件名模式匹配
+import inspect  # 代码检查 - 用于获取函数签名等
+import math  # 数学函数
+import os  # 操作系统接口
+import platform  # 平台信息
+import re  # 正则表达式
+import shutil  # 高级文件操作
+import subprocess  # 子进程管理 - 用于运行外部命令
+import time  # 时间相关函数
+from importlib import metadata  # 包元数据访问
+from pathlib import Path  # 面向对象的文件系统路径
+from types import SimpleNamespace  # 简单命名空间
+
+# 第三方库导入
+import cv2  # OpenCV
+import numpy as np  # NumPy
+import torch  # PyTorch
+
+# Ultralytics 内部导入
 from ultralytics.utils import (
-    ARM64,
-    ASSETS,
-    ASSETS_URL,
-    AUTOINSTALL,
-    GIT,
-    IS_COLAB,
-    IS_JETSON,
-    IS_KAGGLE,
-    IS_PIP_PACKAGE,
-    LINUX,
-    LOGGER,
-    MACOS,
-    ONLINE,
-    PYTHON_VERSION,
-    RKNN_CHIPS,
-    ROOT,
-    TORCH_VERSION,
-    TORCHVISION_VERSION,
-    USER_CONFIG_DIR,
-    WINDOWS,
-    Retry,
-    ThreadingLocked,
-    TryExcept,
-    clean_url,
-    colorstr,
-    downloads,
-    is_github_action_running,
-    url2file,
+    ARM64,  # ARM64 架构标志
+    ASSETS,  # 资源目录路径
+    ASSETS_URL,  # 资源下载 URL
+    AUTOINSTALL,  # 自动安装标志
+    GIT,  # Git 仓库对象
+    IS_COLAB,  # Google Colab 环境标志
+    IS_JETSON,  # NVIDIA Jetson 设备标志
+    IS_KAGGLE,  # Kaggle 环境标志
+    IS_PIP_PACKAGE,  # pip 包标志
+    LINUX,  # Linux 系统标志
+    LOGGER,  # 日志记录器
+    MACOS,  # macOS 系统标志
+    ONLINE,  # 在线状态标志
+    PYTHON_VERSION,  # Python 版本
+    RKNN_CHIPS,  # Rockchip NPU 芯片集合
+    ROOT,  # 项目根目录
+    TORCH_VERSION,  # PyTorch 版本
+    TORCHVISION_VERSION,  # torchvision 版本
+    USER_CONFIG_DIR,  # 用户配置目录
+    WINDOWS,  # Windows 系统标志
+    Retry,  # 重试装饰器
+    ThreadingLocked,  # 线程锁装饰器
+    TryExcept,  # 异常捕获装饰器
+    clean_url,  # URL 清理函数
+    colorstr,  # 彩色字符串函数
+    downloads,  # 下载模块
+    is_github_action_running,  # GitHub Actions 检测
+    url2file,  # URL 转文件名
 )
 
 
 def parse_requirements(file_path=ROOT.parent / "requirements.txt", package=""):
-    """Parse a requirements.txt file, ignoring lines that start with '#' and any text after '#'.
+    """
+    解析 requirements.txt 文件，忽略以 '#' 开头的行和 '#' 后的文本
+    Parse a requirements.txt file, ignoring lines that start with '#' and any text after '#'.
 
     Args:
-        file_path (Path): Path to the requirements.txt file.
-        package (str, optional): Python package to use instead of requirements.txt file.
+        file_path (Path): requirements.txt 文件的路径
+        package (str, optional): Python 包名，如果指定则从包的元数据中读取依赖而非文件
 
     Returns:
-        requirements (list[SimpleNamespace]): List of parsed requirements as SimpleNamespace objects with `name` and
-            `specifier` attributes.
+        requirements (list[SimpleNamespace]): 解析后的依赖列表，每个元素是一个 SimpleNamespace 对象，
+            包含 `name` (包名) 和 `specifier` (版本限定符) 属性
 
     Examples:
         >>> from ultralytics.utils.checks import parse_requirements
         >>> parse_requirements(package="ultralytics")
     """
     if package:
+        # 从包的元数据中获取依赖 (排除额外依赖)
         requires = [x for x in metadata.distribution(package).requires if "extra == " not in x]
     else:
+        # 从 requirements.txt 文件读取
         requires = Path(file_path).read_text().splitlines()
 
     requirements = []
     for line in requires:
-        line = line.strip()
-        if line and not line.startswith("#"):
-            line = line.partition("#")[0].strip()  # ignore inline comments
+        line = line.strip()  # 去除首尾空白
+        if line and not line.startswith("#"):  # 跳过空行和注释行
+            line = line.partition("#")[0].strip()  # 忽略行内注释 (# 之后的内容)
+            # 使用正则表达式匹配包名和版本限定符
+            # 例: "numpy>=1.18.0" -> name="numpy", specifier=">=1.18.0"
             if match := re.match(r"([a-zA-Z0-9-_]+)\s*([<>!=~]+.*)?", line):
                 requirements.append(SimpleNamespace(name=match[1], specifier=match[2].strip() if match[2] else ""))
 
     return requirements
 
 
-@functools.lru_cache
+@functools.lru_cache  # 缓存结果以提高性能 (相同版本号只解析一次)
 def parse_version(version="0.0.0") -> tuple:
-    """Convert a version string to a tuple of integers, ignoring any extra non-numeric string attached to the version.
+    """
+    将版本字符串转换为整数元组，忽略版本号后附加的非数字字符串
+    Convert a version string to a tuple of integers, ignoring any extra non-numeric string attached to the version.
 
     Args:
-        version (str): Version string, i.e. '2.0.1+cpu'
+        version (str): 版本字符串，例如 '2.0.1+cpu'
 
     Returns:
-        (tuple): Tuple of integers representing the numeric part of the version, i.e. (2, 0, 1)
+        (tuple): 表示版本数字部分的整数元组，例如 (2, 0, 1)
+
+    Examples:
+        >>> parse_version('2.0.1+cpu')
+        (2, 0, 1)
+        >>> parse_version('1.2.3rc1')
+        (1, 2, 3)
     """
     try:
-        return tuple(map(int, re.findall(r"\d+", version)[:3]))  # '2.0.1+cpu' -> (2, 0, 1)
+        # 使用正则表达式提取所有数字，取前3个并转换为整数元组
+        # 例: '2.0.1+cpu' -> ['2', '0', '1', ...] -> (2, 0, 1)
+        return tuple(map(int, re.findall(r"\d+", version)[:3]))
     except Exception as e:
         LOGGER.warning(f"failure for parse_version({version}), returning (0, 0, 0): {e}")
-        return 0, 0, 0
+        return 0, 0, 0  # 解析失败时返回默认版本
 
 
 def is_ascii(s) -> bool:
-    """Check if a string is composed of only ASCII characters.
+    """
+    检查字符串是否仅由 ASCII 字符组成
+    Check if a string is composed of only ASCII characters.
 
     Args:
-        s (str | list | tuple | dict): Input to be checked (all are converted to string for checking).
+        s (str | list | tuple | dict): 要检查的输入 (所有类型都会转换为字符串进行检查)
 
     Returns:
-        (bool): True if the string is composed only of ASCII characters, False otherwise.
+        (bool): 如果字符串仅由 ASCII 字符组成则返回 True，否则返回 False
+
+    Examples:
+        >>> is_ascii('hello')
+        True
+        >>> is_ascii('你好')
+        False
     """
+    # ASCII 字符的 Unicode 码点都小于 128
     return all(ord(c) < 128 for c in str(s))
 
 
 def check_imgsz(imgsz, stride=32, min_dim=1, max_dim=2, floor=0):
-    """Verify image size is a multiple of the given stride in each dimension. If the image size is not a multiple of the
+    """
+    验证图像尺寸是否是给定步长的倍数。如果不是，则更新为大于等于 floor 值的最接近的步长倍数。
+    Verify image size is a multiple of the given stride in each dimension. If the image size is not a multiple of the
     stride, update it to the nearest multiple of the stride that is greater than or equal to the given floor value.
 
     Args:
-        imgsz (int | list[int]): Image size.
-        stride (int): Stride value.
-        min_dim (int): Minimum number of dimensions.
-        max_dim (int): Maximum number of dimensions.
-        floor (int): Minimum allowed value for image size.
+        imgsz (int | list[int]): 图像尺寸
+        stride (int): 步长值 (通常是模型的最大下采样率，如 32)
+        min_dim (int): 最小维度数 (1=单个值, 2=[h,w])
+        max_dim (int): 最大维度数
+        floor (int): 图像尺寸的最小允许值
 
     Returns:
-        (list[int] | int): Updated image size.
+        (list[int] | int): 更新后的图像尺寸
+
+    Examples:
+        >>> check_imgsz(640, stride=32)
+        640
+        >>> check_imgsz(641, stride=32)  # 641 不是 32 的倍数，向上调整为 672
+        672
     """
-    # Convert stride to integer if it is a tensor
+    # 如果 stride 是张量，转换为整数 (取最大值)
     stride = int(stride.max() if isinstance(stride, torch.Tensor) else stride)
 
-    # Convert image size to list if it is an integer
+    # 将图像尺寸转换为列表
     if isinstance(imgsz, int):
-        imgsz = [imgsz]
+        imgsz = [imgsz]  # 单个整数转为列表
     elif isinstance(imgsz, (list, tuple)):
-        imgsz = list(imgsz)
-    elif isinstance(imgsz, str):  # i.e. '640' or '[640,640]'
+        imgsz = list(imgsz)  # 元组转为列表
+    elif isinstance(imgsz, str):  # 字符串形式，例如 '640' 或 '[640,640]'
         imgsz = [int(imgsz)] if imgsz.isnumeric() else ast.literal_eval(imgsz)
     else:
         raise TypeError(
@@ -143,7 +200,7 @@ def check_imgsz(imgsz, stride=32, min_dim=1, max_dim=2, floor=0):
             f"Valid imgsz types are int i.e. 'imgsz=640' or list i.e. 'imgsz=[640,640]'"
         )
 
-    # Apply max_dim
+    # 应用最大维度限制
     if len(imgsz) > max_dim:
         msg = (
             "'train' and 'val' imgsz must be an integer, while 'predict' and 'export' imgsz may be a [h, w] list "
@@ -152,27 +209,41 @@ def check_imgsz(imgsz, stride=32, min_dim=1, max_dim=2, floor=0):
         if max_dim != 1:
             raise ValueError(f"imgsz={imgsz} is not a valid image size. {msg}")
         LOGGER.warning(f"updating to 'imgsz={max(imgsz)}'. {msg}")
-        imgsz = [max(imgsz)]
-    # Make image size a multiple of the stride
+        imgsz = [max(imgsz)]  # 取最大值作为尺寸
+
+    # 确保图像尺寸是步长的倍数
+    # 计算方法: 向上取整到最接近的步长倍数，并确保不小于 floor
     sz = [max(math.ceil(x / stride) * stride, floor) for x in imgsz]
 
-    # Print warning message if image size was updated
+    # 如果图像尺寸被更新，打印警告消息
     if sz != imgsz:
         LOGGER.warning(f"imgsz={imgsz} must be multiple of max stride {stride}, updating to {sz}")
 
-    # Add missing dimensions if necessary
+    # 根据需要添加缺失的维度
+    # 如果 min_dim=2 但只有一个值，则复制为 [sz[0], sz[0]]
+    # 如果 min_dim=1 但有多个值，则只取第一个值
     sz = [sz[0], sz[0]] if min_dim == 2 and len(sz) == 1 else sz[0] if min_dim == 1 and len(sz) == 1 else sz
 
     return sz
 
 
-@functools.lru_cache
+@functools.lru_cache  # 缓存结果，避免重复检查
 def check_uv():
-    """Check if uv package manager is installed and can run successfully."""
+    """
+    检查 uv 包管理器是否已安装并能成功运行
+    Check if uv package manager is installed and can run successfully.
+
+    Returns:
+        (bool): 如果 uv 已安装且可用返回 True，否则返回 False
+
+    Note:
+        uv 是一个快速的 Python 包管理器，比 pip 更快
+    """
     try:
+        # 尝试运行 uv -V 命令检查版本
         return subprocess.run(["uv", "-V"], capture_output=True).returncode == 0
     except FileNotFoundError:
-        return False
+        return False  # uv 命令未找到
 
 
 @functools.lru_cache

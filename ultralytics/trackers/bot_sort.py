@@ -1,21 +1,46 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+BOTSort 多目标追踪算法实现
 
-from __future__ import annotations
+此模块实现了 BOTSort（Bot-SORT）算法，这是 ByteTrack 的增强版本，
+结合了 ReID（重识别）特征和 GMC（全局运动补偿）来提高追踪鲁棒性。
 
-from collections import deque
-from typing import Any
+主要特点:
+    - 外观特征：支持 ReID 模型提取外观特征进行目标匹配
+    - GMC 补偿：自动补偿摄像头运动，提高追踪稳定性
+    - 特征平滑：使用指数移动平均平滑特征向量
+    - 多模态匹配：结合 IoU 和外观相似度进行关联
 
-import numpy as np
-import torch
+核心类:
+    - BOTrack: 增强的单目标追踪类，包含特征管理
+    - BOTSORT: BOTSort 追踪器主类，继承自 BYTETracker
+    - ReID: ReID 特征提取器封装
 
-from ultralytics.utils.ops import xywh2xyxy
-from ultralytics.utils.plotting import save_one_box
+算法改进:
+    - 相比 ByteTrack，BOTSort 在遮挡和拥挤场景下表现更好
+    - GMC 使追踪器能适应移动摄像头
+    - ReID 特征提高了长时间遮挡后的重识别能力
 
-from .basetrack import TrackState
-from .byte_tracker import BYTETracker, STrack
-from .utils import matching
-from .utils.gmc import GMC
-from .utils.kalman_filter import KalmanFilterXYWH
+参考文献:
+    BoT-SORT: Robust Associations Multi-Pedestrian Tracking
+    https://arxiv.org/abs/2206.14651
+"""
+
+from __future__ import annotations  # 启用延迟类型注解
+
+from collections import deque  # 双端队列，用于存储特征历史
+from typing import Any  # 类型提示
+
+import numpy as np  # 数值计算
+import torch  # PyTorch 深度学习框架
+
+from ultralytics.utils.ops import xywh2xyxy  # 坐标转换：中心点格式转左上右下格式
+from ultralytics.utils.plotting import save_one_box  # 保存边界框图像
+
+from .basetrack import TrackState  # 追踪状态枚举
+from .byte_tracker import BYTETracker, STrack  # ByteTrack 基类
+from .utils import matching  # 匹配算法模块
+from .utils.gmc import GMC  # 全局运动补偿模块
+from .utils.kalman_filter import KalmanFilterXYWH  # 卡尔曼滤波器（XYWH 格式）
 
 
 class BOTrack(STrack):
@@ -76,23 +101,44 @@ class BOTrack(STrack):
         self.alpha = 0.9
 
     def update_features(self, feat: np.ndarray) -> None:
-        """Update the feature vector and apply exponential moving average smoothing."""
+        """Update the feature vector and apply exponential moving average smoothing.
+
+        更新特征向量并应用指数移动平均（EMA）进行平滑处理。
+        平滑后的特征能减少噪声，提高匹配稳定性。
+
+        Args:
+            feat: 新的特征向量（未归一化）
+        """
+        # 归一化特征向量（L2 范数）
         feat /= np.linalg.norm(feat)
+        # 保存当前特征
         self.curr_feat = feat
+        # 如果是首次更新，直接使用当前特征
         if self.smooth_feat is None:
             self.smooth_feat = feat
         else:
+            # 使用 EMA 平滑特征：smooth_feat = α * smooth_feat + (1-α) * feat
+            # alpha=0.9 表示历史特征权重为 90%，当前特征权重为 10%
             self.smooth_feat = self.alpha * self.smooth_feat + (1 - self.alpha) * feat
+        # 添加到特征历史队列（自动维护最大长度）
         self.features.append(feat)
+        # 重新归一化平滑特征
         self.smooth_feat /= np.linalg.norm(self.smooth_feat)
 
     def predict(self) -> None:
-        """Predict the object's future state using the Kalman filter to update its mean and covariance."""
+        """Predict the object's future state using the Kalman filter to update its mean and covariance.
+
+        使用卡尔曼滤波器预测目标的未来状态，更新均值和协方差。
+        BOTrack 使用 XYWH 格式（中心点 + 宽高），与 STrack 的 XYAH 格式不同。
+        """
         mean_state = self.mean.copy()
+        # 如果不在 Tracked 状态，将速度分量设为 0
+        # mean_state[6] 和 [7] 对应 XYWH 格式中的 vw 和 vh（宽高变化速度）
         if self.state != TrackState.Tracked:
             mean_state[6] = 0
             mean_state[7] = 0
 
+        # 执行卡尔曼滤波的预测步骤
         self.mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
 
     def re_activate(self, new_track: BOTrack, frame_id: int, new_id: bool = False) -> None:
@@ -209,17 +255,38 @@ class BOTSORT(BYTETracker):
             return [BOTrack(xywh, s, c) for (xywh, s, c) in zip(bboxes, results.conf, results.cls)]
 
     def get_dists(self, tracks: list[BOTrack], detections: list[BOTrack]) -> np.ndarray:
-        """Calculate distances between tracks and detections using IoU and optionally ReID embeddings."""
+        """Calculate distances between tracks and detections using IoU and optionally ReID embeddings.
+
+        计算追踪与检测之间的距离，融合 IoU 和 ReID 嵌入（如果启用）。
+        这是 BOTSort 的核心改进：多模态匹配。
+
+        Args:
+            tracks: 追踪列表
+            detections: 检测列表
+
+        Returns:
+            距离矩阵 (N_tracks × N_detections)，值越小表示越匹配
+        """
+        # 计算 IoU 距离（1 - IoU）
         dists = matching.iou_distance(tracks, detections)
+        # 创建距离掩码：IoU 距离大于阈值的配对标记为无效
+        # proximity_thresh 通常为 0.5，表示 IoU < 0.5 的配对会被掩码
         dists_mask = dists > (1 - self.proximity_thresh)
 
+        # 如果启用置信度融合，将检测置信度融入距离计算
         if self.args.fuse_score:
             dists = matching.fuse_score(dists, detections)
 
+        # 如果启用 ReID 并且有编码器
         if self.args.with_reid and self.encoder is not None:
+            # 计算外观嵌入距离（余弦距离或欧氏距离）
             emb_dists = matching.embedding_distance(tracks, detections) / 2.0
+            # 外观距离超过阈值的配对标记为无效（距离设为 1.0）
             emb_dists[emb_dists > (1 - self.appearance_thresh)] = 1.0
+            # 应用 IoU 距离掩码：IoU 太小的配对，忽略外观信息
             emb_dists[dists_mask] = 1.0
+            # 取 IoU 距离和外观距离的最小值（融合策略）
+            # 这样只要任一相似度高，就认为是好的匹配
             dists = np.minimum(dists, emb_dists)
         return dists
 

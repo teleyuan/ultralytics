@@ -1,4 +1,28 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+SAM 模型构建模块
+
+该模块负责构建不同规模的 Segment Anything Model (SAM) 和 SAM2 模型。
+提供了从检查点加载模型的功能，支持多种模型变体。
+
+主要功能:
+    - 构建不同规模的 SAM 模型（Huge、Large、Base）
+    - 构建轻量级 Mobile-SAM 模型
+    - 构建 SAM2 系列模型（小型、小型+、基础+、大型）
+    - 从检查点文件加载模型权重
+    - 统一的模型构建接口
+
+支持的模型:
+    - SAM-H: 使用 ViT-H 编码器的 Huge 模型
+    - SAM-L: 使用 ViT-L 编码器的 Large 模型
+    - SAM-B: 使用 ViT-B 编码器的 Base 模型
+    - Mobile-SAM: 使用 TinyViT 的轻量级模型
+    - SAM2: 改进版本，支持视频分割
+
+版权信息:
+    Copyright (c) Meta Platforms, Inc. and affiliates.
+    原始代码遵循 Meta 的开源许可证
+"""
 
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
@@ -6,32 +30,51 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
-from functools import partial
+from functools import partial  # 用于创建偏函数
 
-import torch
+import torch  # PyTorch 深度学习框架
 
-from ultralytics.utils.downloads import attempt_download_asset
-from ultralytics.utils.patches import torch_load
+# 导入工具函数
+from ultralytics.utils.downloads import attempt_download_asset  # 下载预训练权重
+from ultralytics.utils.patches import torch_load  # 安全加载 PyTorch 模型
 
-from .modules.decoders import MaskDecoder
-from .modules.encoders import FpnNeck, Hiera, ImageEncoder, ImageEncoderViT, MemoryEncoder, PromptEncoder
-from .modules.memory_attention import MemoryAttention, MemoryAttentionLayer
-from .modules.sam import SAM2Model, SAMModel
-from .modules.tiny_encoder import TinyViT
-from .modules.transformer import TwoWayTransformer
+# 导入 SAM 模型组件
+from .modules.decoders import MaskDecoder  # 掩码解码器
+from .modules.encoders import FpnNeck, Hiera, ImageEncoder, ImageEncoderViT, MemoryEncoder, PromptEncoder  # 编码器
+from .modules.memory_attention import MemoryAttention, MemoryAttentionLayer  # 记忆注意力机制
+from .modules.sam import SAM2Model, SAMModel  # SAM 模型主类
+from .modules.tiny_encoder import TinyViT  # 轻量级 TinyViT 编码器
+from .modules.transformer import TwoWayTransformer  # 双向 Transformer
 
 
 def _load_checkpoint(model, checkpoint):
-    """Load checkpoint into model from file path."""
+    """Load checkpoint into model from file path.
+
+    从检查点文件加载模型权重
+
+    该函数负责从文件路径加载模型权重，支持自动下载远程权重文件。
+    如果权重文件包含嵌套的 "model" 键，会自动处理。
+
+    Args:
+        model: 要加载权重的模型实例
+        checkpoint: 检查点文件路径或 URL
+
+    Returns:
+        加载了权重的模型实例
+    """
     if checkpoint is None:
         return model
 
+    # 尝试下载权重文件（如果是 URL）
     checkpoint = attempt_download_asset(checkpoint)
+    # 以二进制模式打开检查点文件
     with open(checkpoint, "rb") as f:
-        state_dict = torch_load(f)
+        state_dict = torch_load(f)  # 安全加载 state_dict
     # Handle nested "model" key
+    # 处理嵌套的 "model" 键（某些检查点会将权重包装在 "model" 键下）
     if "model" in state_dict and isinstance(state_dict["model"], dict):
         state_dict = state_dict["model"]
+    # 加载权重到模型
     model.load_state_dict(state_dict)
     return model
 

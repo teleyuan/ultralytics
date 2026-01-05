@@ -1,124 +1,130 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
-Train a model on a dataset.
+模型训练模块
 
-Usage:
+该模块提供在数据集上训练 YOLO 模型的功能。
+支持单 GPU 和多 GPU 分布式训练，包括自动混合精度、早停、模型 EMA 等特性。
+
+使用示例:
     $ yolo mode=train model=yolo11n.pt data=coco8.yaml imgsz=640 epochs=100 batch=16
 """
 
-from __future__ import annotations
+from __future__ import annotations  # 启用延迟类型注解评估
 
-import gc
-import math
-import os
-import subprocess
-import time
-import warnings
-from copy import copy, deepcopy
-from datetime import datetime, timedelta
-from pathlib import Path
+# 标准库导入
+import gc  # 垃圾回收
+import math  # 数学函数
+import os  # 操作系统接口
+import subprocess  # 子进程管理
+import time  # 时间相关函数
+import warnings  # 警告控制
+from copy import copy, deepcopy  # 对象拷贝
+from datetime import datetime, timedelta  # 日期时间处理
+from pathlib import Path  # 跨平台路径操作
 
-import numpy as np
-import torch
-from torch import distributed as dist
-from torch import nn, optim
+# 第三方库导入
+import numpy as np  # 数组和数值计算
+import torch  # PyTorch 深度学习框架
+from torch import distributed as dist  # 分布式训练
+from torch import nn, optim  # 神经网络和优化器
 
-from ultralytics import __version__
-from ultralytics.cfg import get_cfg, get_save_dir
-from ultralytics.data.utils import check_cls_dataset, check_det_dataset
-from ultralytics.nn.tasks import load_checkpoint
-from ultralytics.utils import (
-    DEFAULT_CFG,
-    GIT,
-    LOCAL_RANK,
-    LOGGER,
-    RANK,
-    TQDM,
-    YAML,
-    callbacks,
-    clean_url,
-    colorstr,
-    emojis,
+# Ultralytics 模块导入
+from ultralytics import __version__  # 版本号
+from ultralytics.cfg import get_cfg, get_save_dir  # 配置管理
+from ultralytics.data.utils import check_cls_dataset, check_det_dataset  # 数据集检查
+from ultralytics.nn.tasks import load_checkpoint  # 检查点加载
+from ultralytics.utils import (  # 工具函数
+    DEFAULT_CFG,  # 默认配置
+    GIT,  # Git 信息
+    LOCAL_RANK,  # 本地进程编号
+    LOGGER,  # 日志记录器
+    RANK,  # 全局进程编号
+    TQDM,  # 进度条
+    YAML,  # YAML 处理
+    callbacks,  # 回调函数
+    clean_url,  # 清理 URL
+    colorstr,  # 彩色字符串
+    emojis,  # 表情符号
 )
-from ultralytics.utils.autobatch import check_train_batch_size
-from ultralytics.utils.checks import check_amp, check_file, check_imgsz, check_model_file_from_stem, print_args
-from ultralytics.utils.dist import ddp_cleanup, generate_ddp_command
-from ultralytics.utils.files import get_latest_run
-from ultralytics.utils.plotting import plot_results
-from ultralytics.utils.torch_utils import (
-    TORCH_2_4,
-    EarlyStopping,
-    ModelEMA,
-    attempt_compile,
-    autocast,
-    convert_optimizer_state_dict_to_fp16,
-    init_seeds,
-    one_cycle,
-    select_device,
-    strip_optimizer,
-    torch_distributed_zero_first,
-    unset_deterministic,
-    unwrap_model,
+from ultralytics.utils.autobatch import check_train_batch_size  # 自动批量大小检查
+from ultralytics.utils.checks import check_amp, check_file, check_imgsz, check_model_file_from_stem, print_args  # 检查函数
+from ultralytics.utils.dist import ddp_cleanup, generate_ddp_command  # 分布式训练工具
+from ultralytics.utils.files import get_latest_run  # 文件工具
+from ultralytics.utils.plotting import plot_results  # 结果绘图
+from ultralytics.utils.torch_utils import (  # PyTorch 工具函数
+    TORCH_2_4,  # PyTorch 2.4 版本标志
+    EarlyStopping,  # 早停机制
+    ModelEMA,  # 模型指数移动平均
+    attempt_compile,  # 尝试编译模型
+    autocast,  # 自动混合精度上下文
+    convert_optimizer_state_dict_to_fp16,  # 优化器状态转 FP16
+    init_seeds,  # 初始化随机种子
+    one_cycle,  # OneCycle 学习率调度
+    select_device,  # 选择设备
+    strip_optimizer,  # 精简优化器
+    torch_distributed_zero_first,  # 分布式同步上下文
+    unset_deterministic,  # 取消确定性设置
+    unwrap_model,  # 解包模型
 )
 
 
 class BaseTrainer:
-    """A base class for creating trainers.
+    """用于创建训练器的基类。
 
-    This class provides the foundation for training YOLO models, handling the training loop, validation, checkpointing,
-    and various training utilities. It supports both single-GPU and multi-GPU distributed training.
+    该类为训练 YOLO 模型提供了基础框架,处理训练循环、验证、检查点保存以及各种训练实用工具。
+    支持单 GPU 和多 GPU 分布式训练。
 
-    Attributes:
-        args (SimpleNamespace): Configuration for the trainer.
-        validator (BaseValidator): Validator instance.
-        model (nn.Module): Model instance.
-        callbacks (defaultdict): Dictionary of callbacks.
-        save_dir (Path): Directory to save results.
-        wdir (Path): Directory to save weights.
-        last (Path): Path to the last checkpoint.
-        best (Path): Path to the best checkpoint.
-        save_period (int): Save checkpoint every x epochs (disabled if < 1).
-        batch_size (int): Batch size for training.
-        epochs (int): Number of epochs to train for.
-        start_epoch (int): Starting epoch for training.
-        device (torch.device): Device to use for training.
-        amp (bool): Flag to enable AMP (Automatic Mixed Precision).
-        scaler (amp.GradScaler): Gradient scaler for AMP.
-        data (str): Path to data.
-        ema (nn.Module): EMA (Exponential Moving Average) of the model.
-        resume (bool): Resume training from a checkpoint.
-        lf (nn.Module): Loss function.
-        scheduler (torch.optim.lr_scheduler._LRScheduler): Learning rate scheduler.
-        best_fitness (float): The best fitness value achieved.
-        fitness (float): Current fitness value.
-        loss (float): Current loss value.
-        tloss (float): Total loss value.
-        loss_names (list): List of loss names.
-        csv (Path): Path to results CSV file.
-        metrics (dict): Dictionary of metrics.
-        plots (dict): Dictionary of plots.
+    属性:
+        args (SimpleNamespace): 训练器的配置参数。
+        validator (BaseValidator): 验证器实例。
+        model (nn.Module): 模型实例。
+        callbacks (defaultdict): 回调函数字典。
+        save_dir (Path): 保存结果的目录。
+        wdir (Path): 保存权重的目录。
+        last (Path): 最新检查点的路径。
+        best (Path): 最佳检查点的路径。
+        save_period (int): 每 x 个 epoch 保存检查点(< 1 时禁用)。
+        batch_size (int): 训练的批次大小。
+        epochs (int): 训练的 epoch 数量。
+        start_epoch (int): 训练的起始 epoch。
+        device (torch.device): 用于训练的设备。
+        amp (bool): 启用自动混合精度(AMP)的标志。
+        scaler (amp.GradScaler): AMP 的梯度缩放器。
+        data (str): 数据路径。
+        ema (nn.Module): 模型的指数移动平均(EMA)。
+        resume (bool): 从检查点恢复训练。
+        lf (nn.Module): 损失函数。
+        scheduler (torch.optim.lr_scheduler._LRScheduler): 学习率调度器。
+        best_fitness (float): 已达到的最佳适应度值。
+        fitness (float): 当前适应度值。
+        loss (float): 当前损失值。
+        tloss (float): 总损失值。
+        loss_names (list): 损失名称列表。
+        csv (Path): 结果 CSV 文件路径。
+        metrics (dict): 指标字典。
+        plots (dict): 绘图字典。
 
-    Methods:
-        train: Execute the training process.
-        validate: Run validation on the test set.
-        save_model: Save model training checkpoints.
-        get_dataset: Get train and validation datasets.
-        setup_model: Load, create, or download model.
-        build_optimizer: Construct an optimizer for the model.
+    方法:
+        train: 执行训练过程。
+        validate: 在测试集上运行验证。
+        save_model: 保存模型训练检查点。
+        get_dataset: 获取训练和验证数据集。
+        setup_model: 加载、创建或下载模型。
+        build_optimizer: 为模型构建优化器。
 
-    Examples:
-        Initialize a trainer and start training
+    示例:
+        初始化训练器并开始训练
         >>> trainer = BaseTrainer(cfg="config.yaml")
         >>> trainer.train()
     """
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
-        """Initialize the BaseTrainer class.
+        """初始化 BaseTrainer 类。
 
-        Args:
-            cfg (str, optional): Path to a configuration file.
-            overrides (dict, optional): Configuration overrides.
-            _callbacks (list, optional): List of callback functions.
+        参数:
+            cfg (str, optional): 配置文件路径。
+            overrides (dict, optional): 配置覆盖参数。
+            _callbacks (list, optional): 回调函数列表。
         """
         self.hub_session = overrides.pop("session", None)  # HUB
         self.args = get_cfg(cfg, overrides)
@@ -203,20 +209,20 @@ class BaseTrainer:
             self.run_callbacks("on_pretrain_routine_start")
 
     def add_callback(self, event: str, callback):
-        """Append the given callback to the event's callback list."""
+        """将给定的回调函数添加到事件的回调列表中。"""
         self.callbacks[event].append(callback)
 
     def set_callback(self, event: str, callback):
-        """Override the existing callbacks with the given callback for the specified event."""
+        """用给定的回调函数覆盖指定事件的现有回调。"""
         self.callbacks[event] = [callback]
 
     def run_callbacks(self, event: str):
-        """Run all existing callbacks associated with a particular event."""
+        """运行与特定事件关联的所有现有回调。"""
         for callback in self.callbacks.get(event, []):
             callback(self)
 
     def train(self):
-        """Allow device='', device=None on Multi-GPU systems to default to device=0."""
+        """在多 GPU 系统上允许 device='' 或 device=None 默认为 device=0。"""
         # Run subprocess if DDP training, else train normally
         if self.ddp:
             # Argument checks
@@ -243,7 +249,7 @@ class BaseTrainer:
             self._do_train()
 
     def _setup_scheduler(self):
-        """Initialize training learning rate scheduler."""
+        """初始化训练学习率调度器。"""
         if self.args.cos_lr:
             self.lf = one_cycle(1, self.args.lrf, self.epochs)  # cosine 1->hyp['lrf']
         else:
@@ -251,7 +257,7 @@ class BaseTrainer:
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
     def _setup_ddp(self):
-        """Initialize and set the DistributedDataParallel parameters for training."""
+        """初始化并设置分布式数据并行(DDP)训练参数。"""
         torch.cuda.set_device(RANK)
         self.device = torch.device("cuda", RANK)
         os.environ["TORCH_NCCL_BLOCKING_WAIT"] = "1"  # set to enforce timeout
@@ -263,7 +269,7 @@ class BaseTrainer:
         )
 
     def _setup_train(self):
-        """Build dataloaders and optimizer on correct rank process."""
+        """在正确的 rank 进程上构建数据加载器和优化器。"""
         ckpt = self.setup_model()
         self.model = self.model.to(self.device)
         self.set_model_attributes()
@@ -358,7 +364,7 @@ class BaseTrainer:
         self.run_callbacks("on_pretrain_routine_end")
 
     def _do_train(self):
-        """Train the model with the specified world size."""
+        """使用指定的 world size 训练模型。"""
         if self.world_size > 1:
             self._setup_ddp()
         self._setup_train()
@@ -528,7 +534,7 @@ class BaseTrainer:
         self.run_callbacks("teardown")
 
     def auto_batch(self, max_num_obj=0):
-        """Calculate optimal batch size based on model and device memory constraints."""
+        """基于模型和设备内存约束计算最优批次大小。"""
         return check_train_batch_size(
             model=self.model,
             imgsz=self.args.imgsz,
@@ -538,7 +544,7 @@ class BaseTrainer:
         )  # returns batch size
 
     def _get_memory(self, fraction=False):
-        """Get accelerator memory utilization in GB or as a fraction of total memory."""
+        """获取加速器内存使用量,以 GB 或总内存的分数形式返回。"""
         memory, total = 0, 0
         if self.device.type == "mps":
             memory = torch.mps.driver_allocated_memory()
@@ -551,7 +557,7 @@ class BaseTrainer:
         return ((memory / total) if total > 0 else 0) if fraction else (memory / 2**30)
 
     def _clear_memory(self, threshold: float | None = None):
-        """Clear accelerator memory by calling garbage collector and emptying cache."""
+        """通过调用垃圾回收器和清空缓存来清理加速器内存。"""
         if threshold:
             assert 0 <= threshold <= 1, "Threshold must be between 0 and 1."
             if self._get_memory(fraction=True) <= threshold:
@@ -565,7 +571,7 @@ class BaseTrainer:
             torch.cuda.empty_cache()
 
     def read_results_csv(self):
-        """Read results.csv into a dictionary using polars."""
+        """使用 polars 将 results.csv 读取到字典中。"""
         import polars as pl  # scope for faster 'import ultralytics'
 
         try:
@@ -574,7 +580,7 @@ class BaseTrainer:
             return {}
 
     def _model_train(self):
-        """Set model in training mode."""
+        """将模型设置为训练模式。"""
         self.model.train()
         # Freeze BN stat
         for n, m in self.model.named_modules():
@@ -582,7 +588,7 @@ class BaseTrainer:
                 m.eval()
 
     def save_model(self):
-        """Save model training checkpoints with additional metadata."""
+        """保存带有额外元数据的模型训练检查点。"""
         import io
 
         # Serialize ckpt to a byte buffer once (faster than repeated torch.save() calls)
@@ -623,10 +629,10 @@ class BaseTrainer:
             (self.wdir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
 
     def get_dataset(self):
-        """Get train and validation datasets from data dictionary.
+        """从数据字典获取训练和验证数据集。
 
-        Returns:
-            (dict): A dictionary containing the training/validation/test dataset and category names.
+        返回:
+            (dict): 包含训练/验证/测试数据集和类别名称的字典。
         """
         try:
             if self.args.task == "classify":
@@ -658,10 +664,10 @@ class BaseTrainer:
         return data
 
     def setup_model(self):
-        """Load, create, or download model for any task.
+        """为任何任务加载、创建或下载模型。
 
-        Returns:
-            (dict): Optional checkpoint to resume training from.
+        返回:
+            (dict): 用于恢复训练的可选检查点。
         """
         if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
             return
@@ -677,7 +683,7 @@ class BaseTrainer:
         return ckpt
 
     def optimizer_step(self):
-        """Perform a single step of the training optimizer with gradient clipping and EMA update."""
+        """执行训练优化器的单步操作,包括梯度裁剪和 EMA 更新。"""
         self.scaler.unscale_(self.optimizer)  # unscale gradients
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
         self.scaler.step(self.optimizer)
@@ -687,15 +693,15 @@ class BaseTrainer:
             self.ema.update(self.model)
 
     def preprocess_batch(self, batch):
-        """Allow custom preprocessing model inputs and ground truths depending on task type."""
+        """根据任务类型允许自定义预处理模型输入和真实标签。"""
         return batch
 
     def validate(self):
-        """Run validation on val set using self.validator.
+        """使用 self.validator 在验证集上运行验证。
 
-        Returns:
-            metrics (dict): Dictionary of validation metrics.
-            fitness (float): Fitness score for the validation.
+        返回:
+            metrics (dict): 验证指标字典。
+            fitness (float): 验证的适应度分数。
         """
         if self.ema and self.world_size > 1:
             # Sync EMA buffers from rank 0 to all ranks
@@ -710,52 +716,52 @@ class BaseTrainer:
         return metrics, fitness
 
     def get_model(self, cfg=None, weights=None, verbose=True):
-        """Get model and raise NotImplementedError for loading cfg files."""
+        """获取模型,对于加载 cfg 文件抛出 NotImplementedError。"""
         raise NotImplementedError("This task trainer doesn't support loading cfg files")
 
     def get_validator(self):
-        """Raise NotImplementedError (must be implemented by subclasses)."""
+        """抛出 NotImplementedError(必须由子类实现)。"""
         raise NotImplementedError("get_validator function not implemented in trainer")
 
     def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
-        """Raise NotImplementedError (must return a `torch.utils.data.DataLoader` in subclasses)."""
+        """抛出 NotImplementedError(必须在子类中返回 `torch.utils.data.DataLoader`)。"""
         raise NotImplementedError("get_dataloader function not implemented in trainer")
 
     def build_dataset(self, img_path, mode="train", batch=None):
-        """Build dataset."""
+        """构建数据集。"""
         raise NotImplementedError("build_dataset function not implemented in trainer")
 
     def label_loss_items(self, loss_items=None, prefix="train"):
-        """Return a loss dict with labeled training loss items tensor.
+        """返回带标签的训练损失项张量的损失字典。
 
-        Notes:
-            This is not needed for classification but necessary for segmentation & detection
+        注意:
+            分类任务不需要此方法,但分割和检测任务需要。
         """
         return {"loss": loss_items} if loss_items is not None else ["loss"]
 
     def set_model_attributes(self):
-        """Set or update model parameters before training."""
+        """在训练前设置或更新模型参数。"""
         self.model.names = self.data["names"]
 
     def build_targets(self, preds, targets):
-        """Build target tensors for training YOLO model."""
+        """为训练 YOLO 模型构建目标张量。"""
         pass
 
     def progress_string(self):
-        """Return a string describing training progress."""
+        """返回描述训练进度的字符串。"""
         return ""
 
     # TODO: may need to put these following functions into callback
     def plot_training_samples(self, batch, ni):
-        """Plot training samples during YOLO training."""
+        """在 YOLO 训练期间绘制训练样本。"""
         pass
 
     def plot_training_labels(self):
-        """Plot training labels for YOLO model."""
+        """绘制 YOLO 模型的训练标签。"""
         pass
 
     def save_metrics(self, metrics):
-        """Save training metrics to a CSV file."""
+        """将训练指标保存到 CSV 文件。"""
         keys, vals = list(metrics.keys()), list(metrics.values())
         n = len(metrics) + 2  # number of cols
         t = time.time() - self.train_time_start
@@ -765,16 +771,16 @@ class BaseTrainer:
             f.write(s + ("%.6g," * n % (self.epoch + 1, t, *vals)).rstrip(",") + "\n")
 
     def plot_metrics(self):
-        """Plot metrics from a CSV file."""
+        """从 CSV 文件绘制指标。"""
         plot_results(file=self.csv, on_plot=self.on_plot)  # save results.png
 
     def on_plot(self, name, data=None):
-        """Register plots (e.g. to be consumed in callbacks)."""
+        """注册绘图(例如在回调中使用)。"""
         path = Path(name)
         self.plots[path] = {"data": data, "timestamp": time.time()}
 
     def final_eval(self):
-        """Perform final evaluation and validation for object detection YOLO model."""
+        """对目标检测 YOLO 模型执行最终评估和验证。"""
         model = self.best if self.best.exists() else None
         with torch_distributed_zero_first(LOCAL_RANK):  # strip only on GPU 0; other GPUs should wait
             if RANK in {-1, 0}:
@@ -791,7 +797,7 @@ class BaseTrainer:
             self.run_callbacks("on_fit_epoch_end")
 
     def check_resume(self, overrides):
-        """Check if resume checkpoint exists and update arguments accordingly."""
+        """检查恢复检查点是否存在并相应更新参数。"""
         resume = self.args.resume
         if resume:
             try:
@@ -842,7 +848,7 @@ class BaseTrainer:
         self.resume = resume
 
     def _load_checkpoint_state(self, ckpt):
-        """Load optimizer, scaler, EMA, and best_fitness from checkpoint."""
+        """从检查点加载优化器、缩放器、EMA 和 best_fitness。"""
         if ckpt.get("optimizer") is not None:
             self.optimizer.load_state_dict(ckpt["optimizer"])
         if ckpt.get("scaler") is not None:
@@ -854,7 +860,7 @@ class BaseTrainer:
         self.best_fitness = ckpt.get("best_fitness", 0.0)
 
     def _handle_nan_recovery(self, epoch):
-        """Detect and recover from NaN/Inf loss and fitness collapse by loading last checkpoint."""
+        """检测并通过加载最新检查点从 NaN/Inf 损失和适应度崩溃中恢复。"""
         loss_nan = self.loss is not None and not self.loss.isfinite()
         fitness_nan = self.fitness is not None and not np.isfinite(self.fitness)
         fitness_collapse = self.best_fitness and self.best_fitness > 0 and self.fitness == 0
@@ -885,7 +891,7 @@ class BaseTrainer:
         return True
 
     def resume_training(self, ckpt):
-        """Resume YOLO training from given epoch and best fitness."""
+        """从给定的 epoch 和最佳适应度恢复 YOLO 训练。"""
         if ckpt is None or not self.resume:
             return
         start_epoch = ckpt.get("epoch", -1) + 1
@@ -905,7 +911,7 @@ class BaseTrainer:
             self._close_dataloader_mosaic()
 
     def _close_dataloader_mosaic(self):
-        """Update dataloaders to stop using mosaic augmentation."""
+        """更新数据加载器以停止使用 mosaic 增强。"""
         if hasattr(self.train_loader.dataset, "mosaic"):
             self.train_loader.dataset.mosaic = False
         if hasattr(self.train_loader.dataset, "close_mosaic"):
@@ -913,19 +919,18 @@ class BaseTrainer:
             self.train_loader.dataset.close_mosaic(hyp=copy(self.args))
 
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
-        """Construct an optimizer for the given model.
+        """为给定模型构建优化器。
 
-        Args:
-            model (torch.nn.Module): The model for which to build an optimizer.
-            name (str, optional): The name of the optimizer to use. If 'auto', the optimizer is selected based on the
-                number of iterations.
-            lr (float, optional): The learning rate for the optimizer.
-            momentum (float, optional): The momentum factor for the optimizer.
-            decay (float, optional): The weight decay for the optimizer.
-            iterations (float, optional): The number of iterations, which determines the optimizer if name is 'auto'.
+        参数:
+            model (torch.nn.Module): 要构建优化器的模型。
+            name (str, optional): 要使用的优化器名称。如果为 'auto',则根据迭代次数选择优化器。
+            lr (float, optional): 优化器的学习率。
+            momentum (float, optional): 优化器的动量因子。
+            decay (float, optional): 优化器的权重衰减。
+            iterations (float, optional): 迭代次数,如果 name 为 'auto' 则用于确定优化器。
 
-        Returns:
-            (torch.optim.Optimizer): The constructed optimizer.
+        返回:
+            (torch.optim.Optimizer): 构建的优化器。
         """
         g = [], [], []  # optimizer parameter groups
         bn = tuple(v for k, v in nn.__dict__.items() if "Norm" in k)  # normalization layers, i.e. BatchNorm2d()

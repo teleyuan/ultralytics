@@ -1,41 +1,53 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
-Ultralytics Results, Boxes and Masks classes for handling inference results.
+推理结果处理模块
 
-Usage: See https://docs.ultralytics.com/modes/predict/
+该模块提供了 Ultralytics YOLO 模型推理结果的封装和处理类，包括边界框、掩码、关键点等。
+主要用于统一处理各种检测任务的输出结果，提供便捷的结果访问和可视化方法。
+
+主要类:
+    - BaseTensor: 张量基类，提供设备管理和类型转换
+    - Results: 推理结果主类，封装图像、预测和元数据
+    - Boxes: 边界框类，处理检测框数据
+    - Masks: 掩码类，处理分割掩码
+    - Keypoints: 关键点类，处理姿态估计关键点
+    - Probs: 概率类，处理分类任务的类别概率
+    - OBB: 有向边界框类，处理旋转目标检测
+
+使用方法: 参见 https://docs.ultralytics.com/modes/predict/
 """
 
-from __future__ import annotations
+from __future__ import annotations  # 启用延迟类型注解评估
 
-from copy import deepcopy
-from functools import lru_cache
-from pathlib import Path
-from typing import Any
+from copy import deepcopy  # 深拷贝对象
+from functools import lru_cache  # LRU 缓存装饰器
+from pathlib import Path  # 跨平台路径操作
+from typing import Any  # 类型提示
 
-import numpy as np
-import torch
+import numpy as np  # 数组和数值计算
+import torch  # PyTorch 深度学习框架
 
-from ultralytics.data.augment import LetterBox
-from ultralytics.utils import LOGGER, DataExportMixin, SimpleClass, ops
-from ultralytics.utils.plotting import Annotator, colors, save_one_box
+# 数据增强和工具导入
+from ultralytics.data.augment import LetterBox  # 图像填充变换
+from ultralytics.utils import LOGGER, DataExportMixin, SimpleClass, ops  # 工具类和操作
+from ultralytics.utils.plotting import Annotator, colors, save_one_box  # 可视化工具
 
 
 class BaseTensor(SimpleClass):
-    """Base tensor class with additional methods for easy manipulation and device handling.
+    """基础张量类,提供额外的方法用于简便操作和设备处理。
 
-    This class provides a foundation for tensor-like objects with device management capabilities, supporting both
-    PyTorch tensors and NumPy arrays. It includes methods for moving data between devices and converting between tensor
-    types.
+    该类为类张量对象提供基础,具备设备管理能力,支持 PyTorch 张量和 NumPy 数组。
+    包含在设备间移动数据和在张量类型间转换的方法。
 
     Attributes:
-        data (torch.Tensor | np.ndarray): Prediction data such as bounding boxes, masks, or keypoints.
-        orig_shape (tuple[int, int]): Original shape of the image, typically in the format (height, width).
+        data (torch.Tensor | np.ndarray): 预测数据,如边界框、掩码或关键点。
+        orig_shape (tuple[int, int]): 图像的原始形状,通常为 (高度, 宽度) 格式。
 
     Methods:
-        cpu: Return a copy of the tensor stored in CPU memory.
-        numpy: Return a copy of the tensor as a numpy array.
-        cuda: Move the tensor to GPU memory, returning a new instance if necessary.
-        to: Return a copy of the tensor with the specified device and dtype.
+        cpu: 返回存储在 CPU 内存中的张量副本。
+        numpy: 返回张量的 numpy 数组副本。
+        cuda: 将张量移至 GPU 内存,必要时返回新实例。
+        to: 返回具有指定设备和数据类型的张量副本。
 
     Examples:
         >>> import torch
@@ -48,22 +60,22 @@ class BaseTensor(SimpleClass):
     """
 
     def __init__(self, data: torch.Tensor | np.ndarray, orig_shape: tuple[int, int]) -> None:
-        """Initialize BaseTensor with prediction data and the original shape of the image.
+        """初始化 BaseTensor，包含预测数据和原始图像形状
 
         Args:
-            data (torch.Tensor | np.ndarray): Prediction data such as bounding boxes, masks, or keypoints.
-            orig_shape (tuple[int, int]): Original shape of the image in (height, width) format.
+            data (torch.Tensor | np.ndarray): 预测数据，如边界框、掩码或关键点
+            orig_shape (tuple[int, int]): 原始图像形状，格式为 (高度, 宽度)
         """
         assert isinstance(data, (torch.Tensor, np.ndarray)), "data must be torch.Tensor or np.ndarray"
-        self.data = data
-        self.orig_shape = orig_shape
+        self.data = data  # 存储预测数据（张量或数组）
+        self.orig_shape = orig_shape  # 存储原始图像尺寸
 
     @property
     def shape(self) -> tuple[int, ...]:
-        """Return the shape of the underlying data tensor.
+        """返回底层数据张量的形状。
 
         Returns:
-            (tuple[int, ...]): The shape of the data tensor.
+            (tuple[int, ...]): 数据张量的形状。
 
         Examples:
             >>> data = torch.rand(100, 4)
@@ -74,10 +86,10 @@ class BaseTensor(SimpleClass):
         return self.data.shape
 
     def cpu(self):
-        """Return a copy of the tensor stored in CPU memory.
+        """返回存储在 CPU 内存中的张量副本。
 
         Returns:
-            (BaseTensor): A new BaseTensor object with the data tensor moved to CPU memory.
+            (BaseTensor): 数据张量已移至 CPU 内存的新 BaseTensor 对象。
 
         Examples:
             >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]]).cuda()
@@ -91,10 +103,10 @@ class BaseTensor(SimpleClass):
         return self if isinstance(self.data, np.ndarray) else self.__class__(self.data.cpu(), self.orig_shape)
 
     def numpy(self):
-        """Return a copy of this object with its data converted to a NumPy array.
+        """返回数据已转换为 NumPy 数组的对象副本。
 
         Returns:
-            (BaseTensor): A new instance with `data` as a NumPy array.
+            (BaseTensor): `data` 为 NumPy 数组的新实例。
 
         Examples:
             >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]])
@@ -107,10 +119,10 @@ class BaseTensor(SimpleClass):
         return self if isinstance(self.data, np.ndarray) else self.__class__(self.data.numpy(), self.orig_shape)
 
     def cuda(self):
-        """Move the tensor to GPU memory.
+        """将张量移至 GPU 内存。
 
         Returns:
-            (BaseTensor): A new BaseTensor instance with the data moved to GPU memory.
+            (BaseTensor): 数据已移至 GPU 内存的新 BaseTensor 实例。
 
         Examples:
             >>> import torch
@@ -124,14 +136,14 @@ class BaseTensor(SimpleClass):
         return self.__class__(torch.as_tensor(self.data).cuda(), self.orig_shape)
 
     def to(self, *args, **kwargs):
-        """Return a copy of the tensor with the specified device and dtype.
+        """返回具有指定设备和数据类型的张量副本。
 
         Args:
-            *args (Any): Variable length argument list to be passed to torch.Tensor.to().
-            **kwargs (Any): Arbitrary keyword arguments to be passed to torch.Tensor.to().
+            *args (Any): 要传递给 torch.Tensor.to() 的可变长度参数列表。
+            **kwargs (Any): 要传递给 torch.Tensor.to() 的任意关键字参数。
 
         Returns:
-            (BaseTensor): A new BaseTensor instance with the data moved to the specified device and/or dtype.
+            (BaseTensor): 数据已移至指定设备和/或数据类型的新 BaseTensor 实例。
 
         Examples:
             >>> base_tensor = BaseTensor(torch.randn(3, 4), orig_shape=(480, 640))
@@ -141,10 +153,10 @@ class BaseTensor(SimpleClass):
         return self.__class__(torch.as_tensor(self.data).to(*args, **kwargs), self.orig_shape)
 
     def __len__(self) -> int:
-        """Return the length of the underlying data tensor.
+        """返回底层数据张量的长度。
 
         Returns:
-            (int): The number of elements in the first dimension of the data tensor.
+            (int): 数据张量第一维度的元素数量。
 
         Examples:
             >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]])
@@ -155,18 +167,18 @@ class BaseTensor(SimpleClass):
         return len(self.data)
 
     def __getitem__(self, idx):
-        """Return a new BaseTensor instance containing the specified indexed elements of the data tensor.
+        """返回包含数据张量指定索引元素的新 BaseTensor 实例。
 
         Args:
-            idx (int | list[int] | torch.Tensor): Index or indices to select from the data tensor.
+            idx (int | list[int] | torch.Tensor): 要从数据张量中选择的索引或索引集。
 
         Returns:
-            (BaseTensor): A new BaseTensor instance containing the indexed data.
+            (BaseTensor): 包含索引数据的新 BaseTensor 实例。
 
         Examples:
             >>> data = torch.tensor([[1, 2, 3], [4, 5, 6]])
             >>> base_tensor = BaseTensor(data, orig_shape=(720, 1280))
-            >>> result = base_tensor[0]  # Select the first row
+            >>> result = base_tensor[0]  # 选择第一行
             >>> print(result.data)
             tensor([1, 2, 3])
         """
@@ -174,50 +186,49 @@ class BaseTensor(SimpleClass):
 
 
 class Results(SimpleClass, DataExportMixin):
-    """A class for storing and manipulating inference results.
+    """用于存储和操作推理结果的类。
 
-    This class provides comprehensive functionality for handling inference results from various Ultralytics models,
-    including detection, segmentation, classification, and pose estimation. It supports visualization, data export, and
-    various coordinate transformations.
+    该类为处理各种 Ultralytics 模型的推理结果提供全面的功能,
+    包括检测、分割、分类和姿态估计。支持可视化、数据导出和各种坐标转换。
 
     Attributes:
-        orig_img (np.ndarray): The original image as a numpy array.
-        orig_shape (tuple[int, int]): Original image shape in (height, width) format.
-        boxes (Boxes | None): Detected bounding boxes.
-        masks (Masks | None): Segmentation masks.
-        probs (Probs | None): Classification probabilities.
-        keypoints (Keypoints | None): Detected keypoints.
-        obb (OBB | None): Oriented bounding boxes.
-        speed (dict): Dictionary containing inference speed information.
-        names (dict): Dictionary mapping class indices to class names.
-        path (str): Path to the input image file.
-        save_dir (str | None): Directory to save results.
+        orig_img (np.ndarray): 作为 numpy 数组的原始图像。
+        orig_shape (tuple[int, int]): 原始图像形状,格式为 (高度, 宽度)。
+        boxes (Boxes | None): 检测到的边界框。
+        masks (Masks | None): 分割掩码。
+        probs (Probs | None): 分类概率。
+        keypoints (Keypoints | None): 检测到的关键点。
+        obb (OBB | None): 有向边界框。
+        speed (dict): 包含推理速度信息的字典。
+        names (dict): 将类别索引映射到类别名称的字典。
+        path (str): 输入图像文件的路径。
+        save_dir (str | None): 保存结果的目录。
 
     Methods:
-        update: Update the Results object with new detection data.
-        cpu: Return a copy of the Results object with all tensors moved to CPU memory.
-        numpy: Convert all tensors in the Results object to numpy arrays.
-        cuda: Move all tensors in the Results object to GPU memory.
-        to: Move all tensors to the specified device and dtype.
-        new: Create a new Results object with the same image, path, names, and speed attributes.
-        plot: Plot detection results on an input BGR image.
-        show: Display the image with annotated inference results.
-        save: Save annotated inference results image to file.
-        verbose: Return a log string for each task in the results.
-        save_txt: Save detection results to a text file.
-        save_crop: Save cropped detection images to specified directory.
-        summary: Convert inference results to a summarized dictionary.
-        to_df: Convert detection results to a Polars DataFrame.
-        to_json: Convert detection results to JSON format.
-        to_csv: Convert detection results to a CSV format.
+        update: 使用新的检测数据更新 Results 对象。
+        cpu: 返回所有张量已移至 CPU 内存的 Results 对象副本。
+        numpy: 将 Results 对象中的所有张量转换为 numpy 数组。
+        cuda: 将 Results 对象中的所有张量移至 GPU 内存。
+        to: 将所有张量移至指定设备和数据类型。
+        new: 创建具有相同图像、路径、名称和速度属性的新 Results 对象。
+        plot: 在输入 BGR 图像上绘制检测结果。
+        show: 显示带有注释推理结果的图像。
+        save: 将带注释的推理结果图像保存到文件。
+        verbose: 返回结果中每个任务的日志字符串。
+        save_txt: 将检测结果保存到文本文件。
+        save_crop: 将裁剪的检测图像保存到指定目录。
+        summary: 将推理结果转换为摘要字典。
+        to_df: 将检测结果转换为 Polars DataFrame。
+        to_json: 将检测结果转换为 JSON 格式。
+        to_csv: 将检测结果转换为 CSV 格式。
 
     Examples:
         >>> results = model("path/to/image.jpg")
-        >>> result = results[0]  # Get the first result
-        >>> boxes = result.boxes  # Get the boxes for the first result
-        >>> masks = result.masks  # Get the masks for the first result
+        >>> result = results[0]  # 获取第一个结果
+        >>> boxes = result.boxes  # 获取第一个结果的边界框
+        >>> masks = result.masks  # 获取第一个结果的掩码
         >>> for result in results:
-        >>>     result.plot()  # Plot detection results
+        >>>     result.plot()  # 绘制检测结果
     """
 
     def __init__(
@@ -232,25 +243,25 @@ class Results(SimpleClass, DataExportMixin):
         obb: torch.Tensor | None = None,
         speed: dict[str, float] | None = None,
     ) -> None:
-        """Initialize the Results class for storing and manipulating inference results.
+        """初始化 Results 类,用于存储和操作推理结果。
 
         Args:
-            orig_img (np.ndarray): The original image as a numpy array.
-            path (str): The path to the image file.
-            names (dict): A dictionary of class names.
-            boxes (torch.Tensor | None): A 2D tensor of bounding box coordinates for each detection.
-            masks (torch.Tensor | None): A 3D tensor of detection masks, where each mask is a binary image.
-            probs (torch.Tensor | None): A 1D tensor of probabilities of each class for classification task.
-            keypoints (torch.Tensor | None): A 2D tensor of keypoint coordinates for each detection.
-            obb (torch.Tensor | None): A 2D tensor of oriented bounding box coordinates for each detection.
-            speed (dict | None): A dictionary containing preprocess, inference, and postprocess speeds (ms/image).
+            orig_img (np.ndarray): 作为 numpy 数组的原始图像。
+            path (str): 图像文件的路径。
+            names (dict): 类别名称的字典。
+            boxes (torch.Tensor | None): 每个检测的边界框坐标的二维张量。
+            masks (torch.Tensor | None): 检测掩码的三维张量,其中每个掩码都是一个二值图像。
+            probs (torch.Tensor | None): 分类任务中每个类别的概率的一维张量。
+            keypoints (torch.Tensor | None): 每个检测的关键点坐标的二维张量。
+            obb (torch.Tensor | None): 每个检测的有向边界框坐标的二维张量。
+            speed (dict | None): 包含预处理、推理和后处理速度的字典 (毫秒/图像)。
 
         Notes:
-            For the default pose model, keypoint indices for human body pose estimation are:
-            0: Nose, 1: Left Eye, 2: Right Eye, 3: Left Ear, 4: Right Ear
-            5: Left Shoulder, 6: Right Shoulder, 7: Left Elbow, 8: Right Elbow
-            9: Left Wrist, 10: Right Wrist, 11: Left Hip, 12: Right Hip
-            13: Left Knee, 14: Right Knee, 15: Left Ankle, 16: Right Ankle
+            对于默认姿态模型,人体姿态估计的关键点索引为:
+            0: 鼻子, 1: 左眼, 2: 右眼, 3: 左耳, 4: 右耳
+            5: 左肩, 6: 右肩, 7: 左肘, 8: 右肘
+            9: 左腕, 10: 右腕, 11: 左髋, 12: 右髋
+            13: 左膝, 14: 右膝, 15: 左踝, 16: 右踝
         """
         self.orig_img = orig_img
         self.orig_shape = orig_img.shape[:2]
@@ -266,27 +277,26 @@ class Results(SimpleClass, DataExportMixin):
         self._keys = "boxes", "masks", "probs", "keypoints", "obb"
 
     def __getitem__(self, idx):
-        """Return a Results object for a specific index of inference results.
+        """返回推理结果特定索引的 Results 对象。
 
         Args:
-            idx (int | slice): Index or slice to retrieve from the Results object.
+            idx (int | slice): 要从 Results 对象检索的索引或切片。
 
         Returns:
-            (Results): A new Results object containing the specified subset of inference results.
+            (Results): 包含指定推理结果子集的新 Results 对象。
 
         Examples:
-            >>> results = model("path/to/image.jpg")  # Perform inference
-            >>> single_result = results[0]  # Get the first result
-            >>> subset_results = results[1:4]  # Get a slice of results
+            >>> results = model("path/to/image.jpg")  # 执行推理
+            >>> single_result = results[0]  # 获取第一个结果
+            >>> subset_results = results[1:4]  # 获取结果切片
         """
         return self._apply("__getitem__", idx)
 
     def __len__(self) -> int:
-        """Return the number of detections in the Results object.
+        """返回 Results 对象中的检测数量。
 
         Returns:
-            (int): The number of detections, determined by the length of the first non-empty attribute in (masks, probs,
-                keypoints, or obb).
+            (int): 检测数量,由 (masks, probs, keypoints 或 obb) 中第一个非空属性的长度确定。
 
         Examples:
             >>> results = Results(orig_img, path, names, boxes=torch.rand(5, 4))
@@ -306,18 +316,18 @@ class Results(SimpleClass, DataExportMixin):
         obb: torch.Tensor | None = None,
         keypoints: torch.Tensor | None = None,
     ):
-        """Update the Results object with new detection data.
+        """使用新的检测数据更新 Results 对象。
 
-        This method allows updating the boxes, masks, probabilities, and oriented bounding boxes (OBB) of the Results
-        object. It ensures that boxes are clipped to the original image shape.
+        该方法允许更新 Results 对象的边界框、掩码、概率和有向边界框 (OBB)。
+        它确保边界框被裁剪到原始图像形状。
 
         Args:
-            boxes (torch.Tensor | None): A tensor of shape (N, 6) containing bounding box coordinates and confidence
-                scores. The format is (x1, y1, x2, y2, conf, class).
-            masks (torch.Tensor | None): A tensor of shape (N, H, W) containing segmentation masks.
-            probs (torch.Tensor | None): A tensor of shape (num_classes,) containing class probabilities.
-            obb (torch.Tensor | None): A tensor of shape (N, 5) containing oriented bounding box coordinates.
-            keypoints (torch.Tensor | None): A tensor of shape (N, 17, 3) containing keypoints.
+            boxes (torch.Tensor | None): 形状为 (N, 6) 的张量,包含边界框坐标和置信度分数。
+                格式为 (x1, y1, x2, y2, conf, class)。
+            masks (torch.Tensor | None): 形状为 (N, H, W) 的张量,包含分割掩码。
+            probs (torch.Tensor | None): 形状为 (num_classes,) 的张量,包含类别概率。
+            obb (torch.Tensor | None): 形状为 (N, 5) 的张量,包含有向边界框坐标。
+            keypoints (torch.Tensor | None): 形状为 (N, 17, 3) 的张量,包含关键点。
 
         Examples:
             >>> results = model("image.jpg")
@@ -336,17 +346,17 @@ class Results(SimpleClass, DataExportMixin):
             self.keypoints = Keypoints(keypoints, self.orig_shape)
 
     def _apply(self, fn: str, *args, **kwargs):
-        """Apply a function to all non-empty attributes and return a new Results object with modified attributes.
+        """对所有非空属性应用函数,并返回具有修改属性的新 Results 对象。
 
-        This method is internally called by methods like .to(), .cuda(), .cpu(), etc.
+        该方法由 .to(), .cuda(), .cpu() 等方法内部调用。
 
         Args:
-            fn (str): The name of the function to apply.
-            *args (Any): Variable length argument list to pass to the function.
-            **kwargs (Any): Arbitrary keyword arguments to pass to the function.
+            fn (str): 要应用的函数名称。
+            *args (Any): 要传递给函数的可变长度参数列表。
+            **kwargs (Any): 要传递给函数的任意关键字参数。
 
         Returns:
-            (Results): A new Results object with attributes modified by the applied function.
+            (Results): 属性已由应用函数修改的新 Results 对象。
 
         Examples:
             >>> results = model("path/to/image.jpg")
@@ -362,26 +372,26 @@ class Results(SimpleClass, DataExportMixin):
         return r
 
     def cpu(self):
-        """Return a copy of the Results object with all its tensors moved to CPU memory.
+        """返回所有张量已移至 CPU 内存的 Results 对象副本。
 
-        This method creates a new Results object with all tensor attributes (boxes, masks, probs, keypoints, obb)
-        transferred to CPU memory. It's useful for moving data from GPU to CPU for further processing or saving.
+        该方法创建一个新的 Results 对象,其所有张量属性 (boxes, masks, probs, keypoints, obb)
+        已转移到 CPU 内存。用于将数据从 GPU 移至 CPU 以进行进一步处理或保存。
 
         Returns:
-            (Results): A new Results object with all tensor attributes on CPU memory.
+            (Results): 所有张量属性都在 CPU 内存上的新 Results 对象。
 
         Examples:
-            >>> results = model("path/to/image.jpg")  # Perform inference
-            >>> cpu_result = results[0].cpu()  # Move the first result to CPU
-            >>> print(cpu_result.boxes.device)  # Output: cpu
+            >>> results = model("path/to/image.jpg")  # 执行推理
+            >>> cpu_result = results[0].cpu()  # 将第一个结果移至 CPU
+            >>> print(cpu_result.boxes.device)  # 输出: cpu
         """
         return self._apply("cpu")
 
     def numpy(self):
-        """Convert all tensors in the Results object to numpy arrays.
+        """将 Results 对象中的所有张量转换为 numpy 数组。
 
         Returns:
-            (Results): A new Results object with all tensors converted to numpy arrays.
+            (Results): 所有张量已转换为 numpy 数组的新 Results 对象。
 
         Examples:
             >>> results = model("path/to/image.jpg")
@@ -390,48 +400,48 @@ class Results(SimpleClass, DataExportMixin):
             <class 'numpy.ndarray'>
 
         Notes:
-            This method creates a new Results object, leaving the original unchanged. It's useful for
-            interoperability with numpy-based libraries or when CPU-based operations are required.
+            该方法创建一个新的 Results 对象,原对象保持不变。
+            用于与基于 numpy 的库互操作或需要基于 CPU 的操作时。
         """
         return self._apply("numpy")
 
     def cuda(self):
-        """Move all tensors in the Results object to GPU memory.
+        """将 Results 对象中的所有张量移至 GPU 内存。
 
         Returns:
-            (Results): A new Results object with all tensors moved to CUDA device.
+            (Results): 所有张量已移至 CUDA 设备的新 Results 对象。
 
         Examples:
             >>> results = model("path/to/image.jpg")
-            >>> cuda_results = results[0].cuda()  # Move first result to GPU
+            >>> cuda_results = results[0].cuda()  # 将第一个结果移至 GPU
             >>> for result in results:
-            ...     result_cuda = result.cuda()  # Move each result to GPU
+            ...     result_cuda = result.cuda()  # 将每个结果移至 GPU
         """
         return self._apply("cuda")
 
     def to(self, *args, **kwargs):
-        """Move all tensors in the Results object to the specified device and dtype.
+        """将 Results 对象中的所有张量移至指定设备和数据类型。
 
         Args:
-            *args (Any): Variable length argument list to be passed to torch.Tensor.to().
-            **kwargs (Any): Arbitrary keyword arguments to be passed to torch.Tensor.to().
+            *args (Any): 要传递给 torch.Tensor.to() 的可变长度参数列表。
+            **kwargs (Any): 要传递给 torch.Tensor.to() 的任意关键字参数。
 
         Returns:
-            (Results): A new Results object with all tensors moved to the specified device and dtype.
+            (Results): 所有张量已移至指定设备和数据类型的新 Results 对象。
 
         Examples:
             >>> results = model("path/to/image.jpg")
-            >>> result_cuda = results[0].to("cuda")  # Move first result to GPU
-            >>> result_cpu = results[0].to("cpu")  # Move first result to CPU
-            >>> result_half = results[0].to(dtype=torch.float16)  # Convert first result to half precision
+            >>> result_cuda = results[0].to("cuda")  # 将第一个结果移至 GPU
+            >>> result_cpu = results[0].to("cpu")  # 将第一个结果移至 CPU
+            >>> result_half = results[0].to(dtype=torch.float16)  # 将第一个结果转换为半精度
         """
         return self._apply("to", *args, **kwargs)
 
     def new(self):
-        """Create a new Results object with the same image, path, names, and speed attributes.
+        """创建具有相同图像、路径、名称和速度属性的新 Results 对象。
 
         Returns:
-            (Results): A new Results object with copied attributes from the original instance.
+            (Results): 从原实例复制属性的新 Results 对象。
 
         Examples:
             >>> results = model("path/to/image.jpg")
@@ -460,30 +470,30 @@ class Results(SimpleClass, DataExportMixin):
         color_mode: str = "class",
         txt_color: tuple[int, int, int] = (255, 255, 255),
     ) -> np.ndarray:
-        """Plot detection results on an input BGR image.
+        """在输入 BGR 图像上绘制检测结果。
 
         Args:
-            conf (bool): Whether to plot detection confidence scores.
-            line_width (float | None): Line width of bounding boxes. If None, scaled to image size.
-            font_size (float | None): Font size for text. If None, scaled to image size.
-            font (str): Font to use for text.
-            pil (bool): Whether to return the image as a PIL Image.
-            img (np.ndarray | None): Image to plot on. If None, uses original image.
-            im_gpu (torch.Tensor | None): Normalized image on GPU for faster mask plotting.
-            kpt_radius (int): Radius of drawn keypoints.
-            kpt_line (bool): Whether to draw lines connecting keypoints.
-            labels (bool): Whether to plot labels of bounding boxes.
-            boxes (bool): Whether to plot bounding boxes.
-            masks (bool): Whether to plot masks.
-            probs (bool): Whether to plot classification probabilities.
-            show (bool): Whether to display the annotated image.
-            save (bool): Whether to save the annotated image.
-            filename (str | None): Filename to save image if save is True.
-            color_mode (str): Specify the color mode, e.g., 'instance' or 'class'.
-            txt_color (tuple[int, int, int]): Text color in BGR format for classification output.
+            conf (bool): 是否绘制检测置信度分数。
+            line_width (float | None): 边界框的线宽。如果为 None,则根据图像大小缩放。
+            font_size (float | None): 文本的字体大小。如果为 None,则根据图像大小缩放。
+            font (str): 用于文本的字体。
+            pil (bool): 是否将图像作为 PIL Image 返回。
+            img (np.ndarray | None): 要绘制的图像。如果为 None,则使用原始图像。
+            im_gpu (torch.Tensor | None): GPU 上的归一化图像,用于更快的掩码绘制。
+            kpt_radius (int): 绘制关键点的半径。
+            kpt_line (bool): 是否绘制连接关键点的线。
+            labels (bool): 是否绘制边界框的标签。
+            boxes (bool): 是否绘制边界框。
+            masks (bool): 是否绘制掩码。
+            probs (bool): 是否绘制分类概率。
+            show (bool): 是否显示带注释的图像。
+            save (bool): 是否保存带注释的图像。
+            filename (str | None): 如果 save 为 True,保存图像的文件名。
+            color_mode (str): 指定颜色模式,例如 'instance' 或 'class'。
+            txt_color (tuple[int, int, int]): 分类输出的文本颜色,BGR 格式。
 
         Returns:
-            (np.ndarray | PIL.Image.Image): Annotated image as a NumPy array (BGR) or PIL image (RGB) if `pil=True`.
+            (np.ndarray | PIL.Image.Image): 带注释的图像,作为 NumPy 数组 (BGR) 或 PIL 图像 (RGB)(如果 `pil=True`)。
 
         Examples:
             >>> results = model("image.jpg")
@@ -579,43 +589,42 @@ class Results(SimpleClass, DataExportMixin):
         return annotator.result(pil)
 
     def show(self, *args, **kwargs):
-        """Display the image with annotated inference results.
+        """显示带有注释推理结果的图像。
 
-        This method plots the detection results on the original image and displays it. It's a convenient way to
-        visualize the model's predictions directly.
+        该方法在原始图像上绘制检测结果并显示它。这是直接可视化模型预测的便捷方法。
 
         Args:
-            *args (Any): Variable length argument list to be passed to the `plot()` method.
-            **kwargs (Any): Arbitrary keyword arguments to be passed to the `plot()` method.
+            *args (Any): 要传递给 `plot()` 方法的可变长度参数列表。
+            **kwargs (Any): 要传递给 `plot()` 方法的任意关键字参数。
 
         Examples:
             >>> results = model("path/to/image.jpg")
-            >>> results[0].show()  # Display the first result
+            >>> results[0].show()  # 显示第一个结果
             >>> for result in results:
-            >>>     result.show()  # Display all results
+            >>>     result.show()  # 显示所有结果
         """
         self.plot(show=True, *args, **kwargs)
 
     def save(self, filename: str | None = None, *args, **kwargs) -> str:
-        """Save annotated inference results image to file.
+        """将带注释的推理结果图像保存到文件。
 
-        This method plots the detection results on the original image and saves the annotated image to a file. It
-        utilizes the `plot` method to generate the annotated image and then saves it to the specified filename.
+        该方法在原始图像上绘制检测结果并将带注释的图像保存到文件。
+        它利用 `plot` 方法生成带注释的图像,然后将其保存到指定的文件名。
 
         Args:
-            filename (str | Path | None): The filename to save the annotated image. If None, a default filename is
-                generated based on the original image path.
-            *args (Any): Variable length argument list to be passed to the `plot` method.
-            **kwargs (Any): Arbitrary keyword arguments to be passed to the `plot` method.
+            filename (str | Path | None): 保存带注释图像的文件名。如果为 None,
+                则根据原始图像路径生成默认文件名。
+            *args (Any): 要传递给 `plot` 方法的可变长度参数列表。
+            **kwargs (Any): 要传递给 `plot` 方法的任意关键字参数。
 
         Returns:
-            (str): The filename where the image was saved.
+            (str): 图像保存的文件名。
 
         Examples:
             >>> results = model("path/to/image.jpg")
             >>> for result in results:
             >>>     result.save("annotated_image.jpg")
-            >>> # Or with custom plot arguments
+            >>> # 或使用自定义绘图参数
             >>> for result in results:
             >>>     result.save("annotated_image.jpg", conf=False, line_width=2)
         """
@@ -625,14 +634,14 @@ class Results(SimpleClass, DataExportMixin):
         return filename
 
     def verbose(self) -> str:
-        """Return a log string for each task in the results, detailing detection and classification outcomes.
+        """返回结果中每个任务的日志字符串,详细说明检测和分类结果。
 
-        This method generates a human-readable string summarizing the detection and classification results. It includes
-        the number of detections for each class and the top probabilities for classification tasks.
+        该方法生成一个人类可读的字符串,总结检测和分类结果。
+        它包括每个类别的检测数量和分类任务的最高概率。
 
         Returns:
-            (str): A formatted string containing a summary of the results. For detection tasks, it includes the number
-                of detections per class. For classification tasks, it includes the top 5 class probabilities.
+            (str): 包含结果摘要的格式化字符串。对于检测任务,它包括每个类别的检测数量。
+                对于分类任务,它包括前 5 个类别概率。
 
         Examples:
             >>> results = model("path/to/image.jpg")
@@ -642,9 +651,9 @@ class Results(SimpleClass, DataExportMixin):
             dog 0.92, cat 0.78, horse 0.64,
 
         Notes:
-            - If there are no detections, the method returns "(no detections), " for detection tasks.
-            - For classification tasks, it returns the top 5 class probabilities and their corresponding class names.
-            - The returned string is comma-separated and ends with a comma and a space.
+            - 如果没有检测,该方法对检测任务返回 "(no detections), "。
+            - 对于分类任务,它返回前 5 个类别概率及其对应的类别名称。
+            - 返回的字符串以逗号分隔,并以逗号和空格结尾。
         """
         boxes = self.obb if self.obb is not None else self.boxes
         if len(self) == 0:
@@ -656,14 +665,14 @@ class Results(SimpleClass, DataExportMixin):
             return "".join(f"{n} {self.names[i]}{'s' * (n > 1)}, " for i, n in enumerate(counts) if n > 0)
 
     def save_txt(self, txt_file: str | Path, save_conf: bool = False) -> str:
-        """Save detection results to a text file.
+        """将检测结果保存到文本文件。
 
         Args:
-            txt_file (str | Path): Path to the output text file.
-            save_conf (bool): Whether to include confidence scores in the output.
+            txt_file (str | Path): 输出文本文件的路径。
+            save_conf (bool): 是否在输出中包含置信度分数。
 
         Returns:
-            (str): Path to the saved text file.
+            (str): 保存的文本文件的路径。
 
         Examples:
             >>> from ultralytics import YOLO
@@ -673,13 +682,13 @@ class Results(SimpleClass, DataExportMixin):
             >>>     result.save_txt("output.txt")
 
         Notes:
-            - The file will contain one line per detection or classification with the following structure:
-              - For detections: `class confidence x_center y_center width height`
-              - For classifications: `confidence class_name`
-              - For masks and keypoints, the specific formats will vary accordingly.
-            - The function will create the output directory if it does not exist.
-            - If save_conf is False, the confidence scores will be excluded from the output.
-            - Existing contents of the file will not be overwritten; new results will be appended.
+            - 文件将包含每个检测或分类的一行,具有以下结构:
+              - 对于检测: `class confidence x_center y_center width height`
+              - 对于分类: `confidence class_name`
+              - 对于掩码和关键点,特定格式会相应变化。
+            - 如果输出目录不存在,该函数将创建它。
+            - 如果 save_conf 为 False,置信度分数将从输出中排除。
+            - 不会覆盖文件的现有内容;新结果将被追加。
         """
         is_obb = self.obb is not None
         boxes = self.obb if is_obb else self.boxes
@@ -712,14 +721,14 @@ class Results(SimpleClass, DataExportMixin):
         return str(txt_file)
 
     def save_crop(self, save_dir: str | Path, file_name: str | Path = Path("im.jpg")):
-        """Save cropped detection images to specified directory.
+        """将裁剪的检测图像保存到指定目录。
 
-        This method saves cropped images of detected objects to a specified directory. Each crop is saved in a
-        subdirectory named after the object's class, with the filename based on the input file_name.
+        该方法将检测到的对象的裁剪图像保存到指定目录。每个裁剪图像都保存在
+        以对象类别命名的子目录中,文件名基于输入的 file_name。
 
         Args:
-            save_dir (str | Path): Directory path where cropped images will be saved.
-            file_name (str | Path): Base filename for the saved cropped images.
+            save_dir (str | Path): 保存裁剪图像的目录路径。
+            file_name (str | Path): 保存的裁剪图像的基本文件名。
 
         Examples:
             >>> results = model("path/to/image.jpg")
@@ -727,10 +736,10 @@ class Results(SimpleClass, DataExportMixin):
             >>>     result.save_crop(save_dir="path/to/crops", file_name="detection")
 
         Notes:
-            - This method does not support Classify or Oriented Bounding Box (OBB) tasks.
-            - Crops are saved as 'save_dir/class_name/file_name.jpg'.
-            - The method will create necessary subdirectories if they don't exist.
-            - Original image is copied before cropping to avoid modifying the original.
+            - 该方法不支持分类或有向边界框 (OBB) 任务。
+            - 裁剪图像保存为 'save_dir/class_name/file_name.jpg'。
+            - 如果子目录不存在,该方法将创建必要的子目录。
+            - 在裁剪前复制原始图像以避免修改原始图像。
         """
         if self.probs is not None:
             LOGGER.warning("Classify task does not support `save_crop`.")
@@ -747,21 +756,19 @@ class Results(SimpleClass, DataExportMixin):
             )
 
     def summary(self, normalize: bool = False, decimals: int = 5) -> list[dict[str, Any]]:
-        """Convert inference results to a summarized dictionary with optional normalization for box coordinates.
+        """将推理结果转换为摘要字典,可选择对边界框坐标进行归一化。
 
-        This method creates a list of detection dictionaries, each containing information about a single detection or
-        classification result. For classification tasks, it returns the top class and its
-        confidence. For detection tasks, it includes class information, bounding box coordinates, and
-        optionally mask segments and keypoints.
+        该方法创建一个检测字典列表,每个字典包含有关单个检测或分类结果的信息。
+        对于分类任务,它返回最高类别及其置信度。对于检测任务,它包括类别信息、
+        边界框坐标,以及可选的掩码片段和关键点。
 
         Args:
-            normalize (bool): Whether to normalize bounding box coordinates by image dimensions.
-            decimals (int): Number of decimal places to round the output values to.
+            normalize (bool): 是否根据图像尺寸归一化边界框坐标。
+            decimals (int): 输出值要舍入到的小数位数。
 
         Returns:
-            (list[dict[str, Any]]): A list of dictionaries, each containing summarized information for a single
-                detection or classification result. The structure of each dictionary varies based on the task type
-                (classification or detection) and available information (boxes, masks, keypoints).
+            (list[dict[str, Any]]): 字典列表,每个字典包含单个检测或分类结果的摘要信息。
+                每个字典的结构根据任务类型(分类或检测)和可用信息(边界框、掩码、关键点)而变化。
 
         Examples:
             >>> results = model("image.jpg")
@@ -813,34 +820,33 @@ class Results(SimpleClass, DataExportMixin):
 
 
 class Boxes(BaseTensor):
-    """A class for managing and manipulating detection boxes.
+    """用于管理和操作检测框的类。
 
-    This class provides comprehensive functionality for handling detection boxes, including their coordinates,
-    confidence scores, class labels, and optional tracking IDs. It supports various box formats and offers methods for
-    easy manipulation and conversion between different coordinate systems.
+    该类为处理检测框提供全面的功能,包括其坐标、置信度分数、类别标签和可选的跟踪 ID。
+    它支持各种边界框格式,并提供在不同坐标系之间轻松操作和转换的方法。
 
     Attributes:
-        data (torch.Tensor | np.ndarray): The raw tensor containing detection boxes and associated data.
-        orig_shape (tuple[int, int]): The original image dimensions (height, width).
-        is_track (bool): Indicates whether tracking IDs are included in the box data.
-        xyxy (torch.Tensor | np.ndarray): Boxes in [x1, y1, x2, y2] format.
-        conf (torch.Tensor | np.ndarray): Confidence scores for each box.
-        cls (torch.Tensor | np.ndarray): Class labels for each box.
-        id (torch.Tensor | None): Tracking IDs for each box (if available).
-        xywh (torch.Tensor | np.ndarray): Boxes in [x, y, width, height] format.
-        xyxyn (torch.Tensor | np.ndarray): Normalized [x1, y1, x2, y2] boxes relative to orig_shape.
-        xywhn (torch.Tensor | np.ndarray): Normalized [x, y, width, height] boxes relative to orig_shape.
+        data (torch.Tensor | np.ndarray): 包含检测框和关联数据的原始张量。
+        orig_shape (tuple[int, int]): 原始图像尺寸 (高度, 宽度)。
+        is_track (bool): 指示边界框数据中是否包含跟踪 ID。
+        xyxy (torch.Tensor | np.ndarray): [x1, y1, x2, y2] 格式的边界框。
+        conf (torch.Tensor | np.ndarray): 每个边界框的置信度分数。
+        cls (torch.Tensor | np.ndarray): 每个边界框的类别标签。
+        id (torch.Tensor | None): 每个边界框的跟踪 ID(如果可用)。
+        xywh (torch.Tensor | np.ndarray): [x, y, width, height] 格式的边界框。
+        xyxyn (torch.Tensor | np.ndarray): 相对于 orig_shape 归一化的 [x1, y1, x2, y2] 边界框。
+        xywhn (torch.Tensor | np.ndarray): 相对于 orig_shape 归一化的 [x, y, width, height] 边界框。
 
     Methods:
-        cpu: Return a copy of the object with all tensors on CPU memory.
-        numpy: Return a copy of the object with all tensors as numpy arrays.
-        cuda: Return a copy of the object with all tensors on GPU memory.
-        to: Return a copy of the object with tensors on specified device and dtype.
+        cpu: 返回所有张量在 CPU 内存上的对象副本。
+        numpy: 返回所有张量为 numpy 数组的对象副本。
+        cuda: 返回所有张量在 GPU 内存上的对象副本。
+        to: 返回张量在指定设备和数据类型上的对象副本。
 
     Examples:
         >>> import torch
         >>> boxes_data = torch.tensor([[100, 50, 150, 100, 0.9, 0], [200, 150, 300, 250, 0.8, 1]])
-        >>> orig_shape = (480, 640)  # height, width
+        >>> orig_shape = (480, 640)  # 高度, 宽度
         >>> boxes = Boxes(boxes_data, orig_shape)
         >>> print(boxes.xyxy)
         >>> print(boxes.conf)
@@ -849,16 +855,15 @@ class Boxes(BaseTensor):
     """
 
     def __init__(self, boxes: torch.Tensor | np.ndarray, orig_shape: tuple[int, int]) -> None:
-        """Initialize the Boxes class with detection box data and the original image shape.
+        """使用检测框数据和原始图像形状初始化 Boxes 类。
 
-        This class manages detection boxes, providing easy access and manipulation of box coordinates, confidence
-        scores, class identifiers, and optional tracking IDs. It supports multiple formats for box coordinates,
-        including both absolute and normalized forms.
+        该类管理检测框,提供对边界框坐标、置信度分数、类别标识符和可选跟踪 ID 的轻松访问和操作。
+        它支持边界框坐标的多种格式,包括绝对和归一化形式。
 
         Args:
-            boxes (torch.Tensor | np.ndarray): A tensor or numpy array with detection boxes of shape (num_boxes, 6) or
-                (num_boxes, 7). Columns should contain [x1, y1, x2, y2, (optional) track_id, confidence, class].
-            orig_shape (tuple[int, int]): The original image shape as (height, width). Used for normalization.
+            boxes (torch.Tensor | np.ndarray): 形状为 (num_boxes, 6) 或 (num_boxes, 7) 的张量或 numpy 数组。
+                列应包含 [x1, y1, x2, y2, (可选) track_id, confidence, class]。
+            orig_shape (tuple[int, int]): 原始图像形状,格式为 (高度, 宽度)。用于归一化。
         """
         if boxes.ndim == 1:
             boxes = boxes[None, :]
@@ -870,11 +875,11 @@ class Boxes(BaseTensor):
 
     @property
     def xyxy(self) -> torch.Tensor | np.ndarray:
-        """Return bounding boxes in [x1, y1, x2, y2] format.
+        """返回 [x1, y1, x2, y2] 格式的边界框。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or numpy array of shape (n, 4) containing bounding box coordinates in
-                [x1, y1, x2, y2] format, where n is the number of boxes.
+            (torch.Tensor | np.ndarray): 形状为 (n, 4) 的张量或 numpy 数组,包含 [x1, y1, x2, y2] 格式的
+                边界框坐标,其中 n 是边界框数量。
 
         Examples:
             >>> results = model("image.jpg")
@@ -886,11 +891,11 @@ class Boxes(BaseTensor):
 
     @property
     def conf(self) -> torch.Tensor | np.ndarray:
-        """Return the confidence scores for each detection box.
+        """返回每个检测框的置信度分数。
 
         Returns:
-            (torch.Tensor | np.ndarray): A 1D tensor or array containing confidence scores for each detection, with
-                shape (N,) where N is the number of detections.
+            (torch.Tensor | np.ndarray): 包含每个检测的置信度分数的一维张量或数组,
+                形状为 (N,),其中 N 是检测数量。
 
         Examples:
             >>> boxes = Boxes(torch.tensor([[10, 20, 30, 40, 0.9, 0]]), orig_shape=(100, 100))
@@ -902,11 +907,11 @@ class Boxes(BaseTensor):
 
     @property
     def cls(self) -> torch.Tensor | np.ndarray:
-        """Return the class ID tensor representing category predictions for each bounding box.
+        """返回表示每个边界框类别预测的类别 ID 张量。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or numpy array containing the class IDs for each detection box. The
-                shape is (N,), where N is the number of boxes.
+            (torch.Tensor | np.ndarray): 包含每个检测框的类别 ID 的张量或 numpy 数组。
+                形状为 (N,),其中 N 是边界框数量。
 
         Examples:
             >>> results = model("image.jpg")
@@ -918,11 +923,11 @@ class Boxes(BaseTensor):
 
     @property
     def id(self) -> torch.Tensor | np.ndarray | None:
-        """Return the tracking IDs for each detection box if available.
+        """返回每个检测框的跟踪 ID(如果可用)。
 
         Returns:
-            (torch.Tensor | None): A tensor containing tracking IDs for each box if tracking is enabled, otherwise None.
-                Shape is (N,) where N is the number of boxes.
+            (torch.Tensor | None): 如果启用跟踪,则包含每个边界框的跟踪 ID 的张量,否则为 None。
+                形状为 (N,),其中 N 是边界框数量。
 
         Examples:
             >>> results = model.track("path/to/video.mp4")
@@ -935,20 +940,19 @@ class Boxes(BaseTensor):
             ...         print("Tracking is not enabled for these boxes.")
 
         Notes:
-            - This property is only available when tracking is enabled (i.e., when `is_track` is True).
-            - The tracking IDs are typically used to associate detections across multiple frames in video analysis.
+            - 仅当启用跟踪时(即 `is_track` 为 True 时)此属性才可用。
+            - 跟踪 ID 通常用于在视频分析中关联多个帧之间的检测。
         """
         return self.data[:, -3] if self.is_track else None
 
     @property
     @lru_cache(maxsize=2)
     def xywh(self) -> torch.Tensor | np.ndarray:
-        """Convert bounding boxes from [x1, y1, x2, y2] format to [x, y, width, height] format.
+        """将边界框从 [x1, y1, x2, y2] 格式转换为 [x, y, width, height] 格式。
 
         Returns:
-            (torch.Tensor | np.ndarray): Boxes in [x_center, y_center, width, height] format, where x_center, y_center
-                are the coordinates of the center point of the bounding box, width, height are the dimensions of the
-                bounding box and the shape of the returned tensor is (N, 4), where N is the number of boxes.
+            (torch.Tensor | np.ndarray): [x_center, y_center, width, height] 格式的边界框,其中 x_center, y_center
+                是边界框中心点的坐标,width, height 是边界框的尺寸,返回张量的形状为 (N, 4),其中 N 是边界框数量。
 
         Examples:
             >>> boxes = Boxes(torch.tensor([[100, 50, 150, 100], [200, 150, 300, 250]]), orig_shape=(480, 640))
@@ -962,14 +966,14 @@ class Boxes(BaseTensor):
     @property
     @lru_cache(maxsize=2)
     def xyxyn(self) -> torch.Tensor | np.ndarray:
-        """Return normalized bounding box coordinates relative to the original image size.
+        """返回相对于原始图像大小归一化的边界框坐标。
 
-        This property calculates and returns the bounding box coordinates in [x1, y1, x2, y2] format, normalized to the
-        range [0, 1] based on the original image dimensions.
+        该属性计算并返回 [x1, y1, x2, y2] 格式的边界框坐标,
+        基于原始图像尺寸归一化到 [0, 1] 范围。
 
         Returns:
-            (torch.Tensor | np.ndarray): Normalized bounding box coordinates with shape (N, 4), where N is the number of
-                boxes. Each row contains [x1, y1, x2, y2] values normalized to [0, 1].
+            (torch.Tensor | np.ndarray): 形状为 (N, 4) 的归一化边界框坐标,其中 N 是边界框数量。
+                每行包含归一化到 [0, 1] 的 [x1, y1, x2, y2] 值。
 
         Examples:
             >>> boxes = Boxes(torch.tensor([[100, 50, 300, 400, 0.9, 0]]), orig_shape=(480, 640))
@@ -985,15 +989,14 @@ class Boxes(BaseTensor):
     @property
     @lru_cache(maxsize=2)
     def xywhn(self) -> torch.Tensor | np.ndarray:
-        """Return normalized bounding boxes in [x, y, width, height] format.
+        """返回 [x, y, width, height] 格式的归一化边界框。
 
-        This property calculates and returns the normalized bounding box coordinates in the format [x_center, y_center,
-        width, height], where all values are relative to the original image dimensions.
+        该属性计算并返回 [x_center, y_center, width, height] 格式的归一化边界框坐标,
+        其中所有值都相对于原始图像尺寸。
 
         Returns:
-            (torch.Tensor | np.ndarray): Normalized bounding boxes with shape (N, 4), where N is the number of boxes.
-                Each row contains [x_center, y_center, width, height] values normalized to [0, 1] based on the original
-                image dimensions.
+            (torch.Tensor | np.ndarray): 形状为 (N, 4) 的归一化边界框,其中 N 是边界框数量。
+                每行包含基于原始图像尺寸归一化到 [0, 1] 的 [x_center, y_center, width, height] 值。
 
         Examples:
             >>> boxes = Boxes(torch.tensor([[100, 50, 150, 100, 0.9, 0]]), orig_shape=(480, 640))
@@ -1008,22 +1011,21 @@ class Boxes(BaseTensor):
 
 
 class Masks(BaseTensor):
-    """A class for storing and manipulating detection masks.
+    """用于存储和操作检测掩码的类。
 
-    This class extends BaseTensor and provides functionality for handling segmentation masks, including methods for
-    converting between pixel and normalized coordinates.
+    该类扩展 BaseTensor 并提供处理分割掩码的功能,包括在像素坐标和归一化坐标之间转换的方法。
 
     Attributes:
-        data (torch.Tensor | np.ndarray): The raw tensor or array containing mask data.
-        orig_shape (tuple): Original image shape in (height, width) format.
-        xy (list[np.ndarray]): A list of segments in pixel coordinates.
-        xyn (list[np.ndarray]): A list of normalized segments.
+        data (torch.Tensor | np.ndarray): 包含掩码数据的原始张量或数组。
+        orig_shape (tuple): 原始图像形状,格式为 (高度, 宽度)。
+        xy (list[np.ndarray]): 像素坐标中的片段列表。
+        xyn (list[np.ndarray]): 归一化片段的列表。
 
     Methods:
-        cpu: Return a copy of the Masks object with the mask tensor on CPU memory.
-        numpy: Return a copy of the Masks object with the mask tensor as a numpy array.
-        cuda: Return a copy of the Masks object with the mask tensor on GPU memory.
-        to: Return a copy of the Masks object with the mask tensor on specified device and dtype.
+        cpu: 返回掩码张量在 CPU 内存上的 Masks 对象副本。
+        numpy: 返回掩码张量为 numpy 数组的 Masks 对象副本。
+        cuda: 返回掩码张量在 GPU 内存上的 Masks 对象副本。
+        to: 返回掩码张量在指定设备和数据类型上的 Masks 对象副本。
 
     Examples:
         >>> masks_data = torch.rand(1, 160, 160)
@@ -1034,11 +1036,11 @@ class Masks(BaseTensor):
     """
 
     def __init__(self, masks: torch.Tensor | np.ndarray, orig_shape: tuple[int, int]) -> None:
-        """Initialize the Masks class with detection mask data and the original image shape.
+        """使用检测掩码数据和原始图像形状初始化 Masks 类。
 
         Args:
-            masks (torch.Tensor | np.ndarray): Detection masks with shape (num_masks, height, width).
-            orig_shape (tuple): The original image shape as (height, width). Used for normalization.
+            masks (torch.Tensor | np.ndarray): 形状为 (num_masks, height, width) 的检测掩码。
+            orig_shape (tuple): 原始图像形状,格式为 (高度, 宽度)。用于归一化。
         """
         if masks.ndim == 2:
             masks = masks[None, :]
@@ -1047,21 +1049,19 @@ class Masks(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def xyn(self) -> list[np.ndarray]:
-        """Return normalized xy-coordinates of the segmentation masks.
+        """返回分割掩码的归一化 xy 坐标。
 
-        This property calculates and caches the normalized xy-coordinates of the segmentation masks. The coordinates are
-        normalized relative to the original image shape.
+        该属性计算并缓存分割掩码的归一化 xy 坐标。坐标相对于原始图像形状进行归一化。
 
         Returns:
-            (list[np.ndarray]): A list of numpy arrays, where each array contains the normalized xy-coordinates of a
-                single segmentation mask. Each array has shape (N, 2), where N is the number of points in the
-                mask contour.
+            (list[np.ndarray]): numpy 数组列表,其中每个数组包含单个分割掩码的归一化 xy 坐标。
+                每个数组的形状为 (N, 2),其中 N 是掩码轮廓中的点数。
 
         Examples:
             >>> results = model("image.jpg")
             >>> masks = results[0].masks
             >>> normalized_coords = masks.xyn
-            >>> print(normalized_coords[0])  # Normalized coordinates of the first mask
+            >>> print(normalized_coords[0])  # 第一个掩码的归一化坐标
         """
         return [
             ops.scale_coords(self.data.shape[1:], x, self.orig_shape, normalize=True)
@@ -1071,21 +1071,21 @@ class Masks(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def xy(self) -> list[np.ndarray]:
-        """Return the [x, y] pixel coordinates for each segment in the mask tensor.
+        """返回掩码张量中每个片段的 [x, y] 像素坐标。
 
-        This property calculates and returns a list of pixel coordinates for each segmentation mask in the Masks object.
-        The coordinates are scaled to match the original image dimensions.
+        该属性计算并返回 Masks 对象中每个分割掩码的像素坐标列表。
+        坐标被缩放以匹配原始图像尺寸。
 
         Returns:
-            (list[np.ndarray]): A list of numpy arrays, where each array contains the [x, y] pixel coordinates for a
-                single segmentation mask. Each array has shape (N, 2), where N is the number of points in the segment.
+            (list[np.ndarray]): numpy 数组列表,其中每个数组包含单个分割掩码的 [x, y] 像素坐标。
+                每个数组的形状为 (N, 2),其中 N 是片段中的点数。
 
         Examples:
             >>> results = model("image.jpg")
             >>> masks = results[0].masks
             >>> xy_coords = masks.xy
-            >>> print(len(xy_coords))  # Number of masks
-            >>> print(xy_coords[0].shape)  # Shape of first mask's coordinates
+            >>> print(len(xy_coords))  # 掩码数量
+            >>> print(xy_coords[0].shape)  # 第一个掩码坐标的形状
         """
         return [
             ops.scale_coords(self.data.shape[1:], x, self.orig_shape, normalize=False)
@@ -1094,47 +1094,47 @@ class Masks(BaseTensor):
 
 
 class Keypoints(BaseTensor):
-    """A class for storing and manipulating detection keypoints.
+    """用于存储和操作检测关键点的类。
 
-    This class encapsulates functionality for handling keypoint data, including coordinate manipulation, normalization,
-    and confidence values. It supports keypoint detection results with optional visibility information.
+    该类封装了处理关键点数据的功能,包括坐标操作、归一化和置信度值。
+    它支持带有可选可见性信息的关键点检测结果。
 
     Attributes:
-        data (torch.Tensor): The raw tensor containing keypoint data.
-        orig_shape (tuple[int, int]): The original image dimensions (height, width).
-        has_visible (bool): Indicates whether visibility information is available for keypoints.
-        xy (torch.Tensor): Keypoint coordinates in [x, y] format.
-        xyn (torch.Tensor): Normalized keypoint coordinates in [x, y] format, relative to orig_shape.
-        conf (torch.Tensor): Confidence values for each keypoint, if available.
+        data (torch.Tensor): 包含关键点数据的原始张量。
+        orig_shape (tuple[int, int]): 原始图像尺寸 (高度, 宽度)。
+        has_visible (bool): 指示关键点是否有可见性信息。
+        xy (torch.Tensor): [x, y] 格式的关键点坐标。
+        xyn (torch.Tensor): [x, y] 格式的归一化关键点坐标,相对于 orig_shape。
+        conf (torch.Tensor): 每个关键点的置信度值(如果可用)。
 
     Methods:
-        cpu: Return a copy of the keypoints tensor on CPU memory.
-        numpy: Return a copy of the keypoints tensor as a numpy array.
-        cuda: Return a copy of the keypoints tensor on GPU memory.
-        to: Return a copy of the keypoints tensor with specified device and dtype.
+        cpu: 返回关键点张量在 CPU 内存上的副本。
+        numpy: 返回关键点张量的 numpy 数组副本。
+        cuda: 返回关键点张量在 GPU 内存上的副本。
+        to: 返回具有指定设备和数据类型的关键点张量副本。
 
     Examples:
         >>> import torch
         >>> from ultralytics.engine.results import Keypoints
-        >>> keypoints_data = torch.rand(1, 17, 3)  # 1 detection, 17 keypoints, (x, y, conf)
-        >>> orig_shape = (480, 640)  # Original image shape (height, width)
+        >>> keypoints_data = torch.rand(1, 17, 3)  # 1 个检测, 17 个关键点, (x, y, conf)
+        >>> orig_shape = (480, 640)  # 原始图像形状 (高度, 宽度)
         >>> keypoints = Keypoints(keypoints_data, orig_shape)
-        >>> print(keypoints.xy.shape)  # Access xy coordinates
-        >>> print(keypoints.conf)  # Access confidence values
-        >>> keypoints_cpu = keypoints.cpu()  # Move keypoints to CPU
+        >>> print(keypoints.xy.shape)  # 访问 xy 坐标
+        >>> print(keypoints.conf)  # 访问置信度值
+        >>> keypoints_cpu = keypoints.cpu()  # 将关键点移至 CPU
     """
 
     def __init__(self, keypoints: torch.Tensor | np.ndarray, orig_shape: tuple[int, int]) -> None:
-        """Initialize the Keypoints object with detection keypoints and original image dimensions.
+        """使用检测关键点和原始图像尺寸初始化 Keypoints 对象。
 
-        This method processes the input keypoints tensor, handling both 2D and 3D formats. For 3D tensors (x, y,
-        confidence), it masks out low-confidence keypoints by setting their coordinates to zero.
+        该方法处理输入关键点张量,处理二维和三维格式。对于三维张量 (x, y, confidence),
+        它通过将低置信度关键点的坐标设置为零来屏蔽它们。
 
         Args:
-            keypoints (torch.Tensor): A tensor containing keypoint data. Shape can be either:
-                - (num_objects, num_keypoints, 2) for x, y coordinates only
-                - (num_objects, num_keypoints, 3) for x, y coordinates and confidence scores
-            orig_shape (tuple[int, int]): The original image dimensions (height, width).
+            keypoints (torch.Tensor): 包含关键点数据的张量。形状可以是:
+                - (num_objects, num_keypoints, 2) 仅用于 x, y 坐标
+                - (num_objects, num_keypoints, 3) 用于 x, y 坐标和置信度分数
+            orig_shape (tuple[int, int]): 原始图像尺寸 (高度, 宽度)。
         """
         if keypoints.ndim == 2:
             keypoints = keypoints[None, :]
@@ -1144,35 +1144,34 @@ class Keypoints(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def xy(self) -> torch.Tensor | np.ndarray:
-        """Return x, y coordinates of keypoints.
+        """返回关键点的 x, y 坐标。
 
         Returns:
-            (torch.Tensor): A tensor containing the x, y coordinates of keypoints with shape (N, K, 2), where N is the
-                number of detections and K is the number of keypoints per detection.
+            (torch.Tensor): 包含关键点 x, y 坐标的张量,形状为 (N, K, 2),其中 N 是检测数量,
+                K 是每个检测的关键点数量。
 
         Examples:
             >>> results = model("image.jpg")
             >>> keypoints = results[0].keypoints
             >>> xy = keypoints.xy
             >>> print(xy.shape)  # (N, K, 2)
-            >>> print(xy[0])  # x, y coordinates of keypoints for first detection
+            >>> print(xy[0])  # 第一个检测的关键点 x, y 坐标
 
         Notes:
-            - The returned coordinates are in pixel units relative to the original image dimensions.
-            - If keypoints were initialized with confidence values, only keypoints with confidence >= 0.5 are returned.
-            - This property uses LRU caching to improve performance on repeated access.
+            - 返回的坐标是相对于原始图像尺寸的像素单位。
+            - 如果关键点使用置信度值初始化,则仅返回置信度 >= 0.5 的关键点。
+            - 此属性使用 LRU 缓存以提高重复访问的性能。
         """
         return self.data[..., :2]
 
     @property
     @lru_cache(maxsize=1)
     def xyn(self) -> torch.Tensor | np.ndarray:
-        """Return normalized coordinates (x, y) of keypoints relative to the original image size.
+        """返回相对于原始图像大小的关键点归一化坐标 (x, y)。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or array of shape (N, K, 2) containing normalized keypoint
-                coordinates, where N is the number of instances, K is the number of keypoints, and the last dimension
-                contains [x, y] values in the range [0, 1].
+            (torch.Tensor | np.ndarray): 形状为 (N, K, 2) 的张量或数组,包含归一化关键点坐标,
+                其中 N 是实例数量,K 是关键点数量,最后一个维度包含 [0, 1] 范围内的 [x, y] 值。
 
         Examples:
             >>> keypoints = Keypoints(torch.rand(1, 17, 2), orig_shape=(480, 640))
@@ -1188,14 +1187,14 @@ class Keypoints(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def conf(self) -> torch.Tensor | np.ndarray | None:
-        """Return confidence values for each keypoint.
+        """返回每个关键点的置信度值。
 
         Returns:
-            (torch.Tensor | None): A tensor containing confidence scores for each keypoint if available, otherwise None.
-                Shape is (num_detections, num_keypoints) for batched data or (num_keypoints,) for single detection.
+            (torch.Tensor | None): 包含每个关键点置信度分数的张量(如果可用),否则为 None。
+                对于批量数据,形状为 (num_detections, num_keypoints);对于单个检测,形状为 (num_keypoints,)。
 
         Examples:
-            >>> keypoints = Keypoints(torch.rand(1, 17, 3), orig_shape=(640, 640))  # 1 detection, 17 keypoints
+            >>> keypoints = Keypoints(torch.rand(1, 17, 3), orig_shape=(640, 640))  # 1 个检测, 17 个关键点
             >>> conf = keypoints.conf
             >>> print(conf.shape)  # torch.Size([1, 17])
         """
@@ -1203,24 +1202,23 @@ class Keypoints(BaseTensor):
 
 
 class Probs(BaseTensor):
-    """A class for storing and manipulating classification probabilities.
+    """用于存储和操作分类概率的类。
 
-    This class extends BaseTensor and provides methods for accessing and manipulating classification probabilities,
-    including top-1 and top-5 predictions.
+    该类扩展 BaseTensor 并提供用于访问和操作分类概率的方法,包括 top-1 和 top-5 预测。
 
     Attributes:
-        data (torch.Tensor | np.ndarray): The raw tensor or array containing classification probabilities.
-        orig_shape (tuple | None): The original image shape as (height, width). Not used in this class.
-        top1 (int): Index of the class with the highest probability.
-        top5 (list[int]): Indices of the top 5 classes by probability.
-        top1conf (torch.Tensor | np.ndarray): Confidence score of the top 1 class.
-        top5conf (torch.Tensor | np.ndarray): Confidence scores of the top 5 classes.
+        data (torch.Tensor | np.ndarray): 包含分类概率的原始张量或数组。
+        orig_shape (tuple | None): 原始图像形状,格式为 (高度, 宽度)。此类中未使用。
+        top1 (int): 具有最高概率的类别索引。
+        top5 (list[int]): 按概率排序的前 5 个类别的索引。
+        top1conf (torch.Tensor | np.ndarray): top 1 类别的置信度分数。
+        top5conf (torch.Tensor | np.ndarray): top 5 类别的置信度分数。
 
     Methods:
-        cpu: Return a copy of the probabilities tensor on CPU memory.
-        numpy: Return a copy of the probabilities tensor as a numpy array.
-        cuda: Return a copy of the probabilities tensor on GPU memory.
-        to: Return a copy of the probabilities tensor with specified device and dtype.
+        cpu: 返回概率张量在 CPU 内存上的副本。
+        numpy: 返回概率张量的 numpy 数组副本。
+        cuda: 返回概率张量在 GPU 内存上的副本。
+        to: 返回具有指定设备和数据类型的概率张量副本。
 
     Examples:
         >>> probs = torch.tensor([0.1, 0.3, 0.6])
@@ -1236,25 +1234,24 @@ class Probs(BaseTensor):
     """
 
     def __init__(self, probs: torch.Tensor | np.ndarray, orig_shape: tuple[int, int] | None = None) -> None:
-        """Initialize the Probs class with classification probabilities.
+        """使用分类概率初始化 Probs 类。
 
-        This class stores and manages classification probabilities, providing easy access to top predictions and their
-        confidences.
+        该类存储和管理分类概率,提供对最高预测及其置信度的轻松访问。
 
         Args:
-            probs (torch.Tensor | np.ndarray): A 1D tensor or array of classification probabilities.
-            orig_shape (tuple | None): The original image shape as (height, width). Not used in this class but kept for
-                consistency with other result classes.
+            probs (torch.Tensor | np.ndarray): 分类概率的一维张量或数组。
+            orig_shape (tuple | None): 原始图像形状,格式为 (高度, 宽度)。
+                此类中未使用,但为与其他结果类保持一致而保留。
         """
         super().__init__(probs, orig_shape)
 
     @property
     @lru_cache(maxsize=1)
     def top1(self) -> int:
-        """Return the index of the class with the highest probability.
+        """返回具有最高概率的类别索引。
 
         Returns:
-            (int): Index of the class with the highest probability.
+            (int): 具有最高概率的类别索引。
 
         Examples:
             >>> probs = Probs(torch.tensor([0.1, 0.3, 0.6]))
@@ -1266,33 +1263,32 @@ class Probs(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def top5(self) -> list[int]:
-        """Return the indices of the top 5 class probabilities.
+        """返回前 5 个类别概率的索引。
 
         Returns:
-            (list[int]): A list containing the indices of the top 5 class probabilities, sorted in descending order.
+            (list[int]): 包含前 5 个类别概率索引的列表,按降序排列。
 
         Examples:
             >>> probs = Probs(torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]))
             >>> print(probs.top5)
             [4, 3, 2, 1, 0]
         """
-        return (-self.data).argsort(0)[:5].tolist()  # this way works with both torch and numpy.
+        return (-self.data).argsort(0)[:5].tolist()  # 这种方式适用于 torch 和 numpy
 
     @property
     @lru_cache(maxsize=1)
     def top1conf(self) -> torch.Tensor | np.ndarray:
-        """Return the confidence score of the highest probability class.
+        """返回最高概率类别的置信度分数。
 
-        This property retrieves the confidence score (probability) of the class with the highest predicted probability
-        from the classification results.
+        该属性从分类结果中检索具有最高预测概率的类别的置信度分数(概率)。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor containing the confidence score of the top 1 class.
+            (torch.Tensor | np.ndarray): 包含 top 1 类别置信度分数的张量。
 
         Examples:
-            >>> results = model("image.jpg")  # classify an image
-            >>> probs = results[0].probs  # get classification probabilities
-            >>> top1_confidence = probs.top1conf  # get confidence of top 1 class
+            >>> results = model("image.jpg")  # 对图像进行分类
+            >>> probs = results[0].probs  # 获取分类概率
+            >>> top1_confidence = probs.top1conf  # 获取 top 1 类别的置信度
             >>> print(f"Top 1 class confidence: {top1_confidence.item():.4f}")
         """
         return self.data[self.top1]
@@ -1300,48 +1296,46 @@ class Probs(BaseTensor):
     @property
     @lru_cache(maxsize=1)
     def top5conf(self) -> torch.Tensor | np.ndarray:
-        """Return confidence scores for the top 5 classification predictions.
+        """返回前 5 个分类预测的置信度分数。
 
-        This property retrieves the confidence scores corresponding to the top 5 class probabilities predicted by the
-        model. It provides a quick way to access the most likely class predictions along with their associated
-        confidence levels.
+        该属性检索与模型预测的前 5 个类别概率对应的置信度分数。
+        它提供了一种快速访问最可能的类别预测及其相关置信度级别的方法。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or array containing the confidence scores for the top 5 predicted
-                classes, sorted in descending order of probability.
+            (torch.Tensor | np.ndarray): 包含前 5 个预测类别的置信度分数的张量或数组,按概率降序排列。
 
         Examples:
             >>> results = model("image.jpg")
             >>> probs = results[0].probs
             >>> top5_conf = probs.top5conf
-            >>> print(top5_conf)  # Prints confidence scores for top 5 classes
+            >>> print(top5_conf)  # 打印前 5 个类别的置信度分数
         """
         return self.data[self.top5]
 
 
 class OBB(BaseTensor):
-    """A class for storing and manipulating Oriented Bounding Boxes (OBB).
+    """用于存储和操作有向边界框 (OBB) 的类。
 
-    This class provides functionality to handle oriented bounding boxes, including conversion between different formats,
-    normalization, and access to various properties of the boxes. It supports both tracking and non-tracking scenarios.
+    该类提供处理有向边界框的功能,包括不同格式之间的转换、归一化以及对边界框各种属性的访问。
+    它支持跟踪和非跟踪场景。
 
     Attributes:
-        data (torch.Tensor): The raw OBB tensor containing box coordinates and associated data.
-        orig_shape (tuple): Original image size as (height, width).
-        is_track (bool): Indicates whether tracking IDs are included in the box data.
-        xywhr (torch.Tensor | np.ndarray): Boxes in [x_center, y_center, width, height, rotation] format.
-        conf (torch.Tensor | np.ndarray): Confidence scores for each box.
-        cls (torch.Tensor | np.ndarray): Class labels for each box.
-        id (torch.Tensor | np.ndarray): Tracking IDs for each box, if available.
-        xyxyxyxy (torch.Tensor | np.ndarray): Boxes in 8-point [x1, y1, x2, y2, x3, y3, x4, y4] format.
-        xyxyxyxyn (torch.Tensor | np.ndarray): Normalized 8-point coordinates relative to orig_shape.
-        xyxy (torch.Tensor | np.ndarray): Axis-aligned bounding boxes in [x1, y1, x2, y2] format.
+        data (torch.Tensor): 包含边界框坐标和关联数据的原始 OBB 张量。
+        orig_shape (tuple): 原始图像大小,格式为 (高度, 宽度)。
+        is_track (bool): 指示边界框数据中是否包含跟踪 ID。
+        xywhr (torch.Tensor | np.ndarray): [x_center, y_center, width, height, rotation] 格式的边界框。
+        conf (torch.Tensor | np.ndarray): 每个边界框的置信度分数。
+        cls (torch.Tensor | np.ndarray): 每个边界框的类别标签。
+        id (torch.Tensor | np.ndarray): 每个边界框的跟踪 ID(如果可用)。
+        xyxyxyxy (torch.Tensor | np.ndarray): 8 点 [x1, y1, x2, y2, x3, y3, x4, y4] 格式的边界框。
+        xyxyxyxyn (torch.Tensor | np.ndarray): 相对于 orig_shape 归一化的 8 点坐标。
+        xyxy (torch.Tensor | np.ndarray): [x1, y1, x2, y2] 格式的轴对齐边界框。
 
     Methods:
-        cpu: Return a copy of the OBB object with all tensors on CPU memory.
-        numpy: Return a copy of the OBB object with all tensors as numpy arrays.
-        cuda: Return a copy of the OBB object with all tensors on GPU memory.
-        to: Return a copy of the OBB object with tensors on specified device and dtype.
+        cpu: 返回所有张量在 CPU 内存上的 OBB 对象副本。
+        numpy: 返回所有张量为 numpy 数组的 OBB 对象副本。
+        cuda: 返回所有张量在 GPU 内存上的 OBB 对象副本。
+        to: 返回张量在指定设备和数据类型上的 OBB 对象副本。
 
     Examples:
         >>> boxes = torch.tensor([[100, 50, 150, 100, 30, 0.9, 0]])  # xywhr, conf, cls
@@ -1352,19 +1346,17 @@ class OBB(BaseTensor):
     """
 
     def __init__(self, boxes: torch.Tensor | np.ndarray, orig_shape: tuple[int, int]) -> None:
-        """Initialize an OBB (Oriented Bounding Box) instance with oriented bounding box data and original image shape.
+        """使用有向边界框数据和原始图像形状初始化 OBB(有向边界框)实例。
 
-        This class stores and manipulates Oriented Bounding Boxes (OBB) for object detection tasks. It provides various
-        properties and methods to access and transform the OBB data.
+        该类存储和操作用于目标检测任务的有向边界框 (OBB)。它提供访问和转换 OBB 数据的各种属性和方法。
 
         Args:
-            boxes (torch.Tensor | np.ndarray): A tensor or numpy array containing the detection boxes, with shape
-                (num_boxes, 7) or (num_boxes, 8). The last two columns contain confidence and class values. If present,
-                the third last column contains track IDs, and the fifth column contains rotation.
-            orig_shape (tuple[int, int]): Original image size, in the format (height, width).
+            boxes (torch.Tensor | np.ndarray): 包含检测框的张量或 numpy 数组,形状为 (num_boxes, 7) 或 (num_boxes, 8)。
+                最后两列包含置信度和类别值。如果存在,倒数第三列包含跟踪 ID,第五列包含旋转角度。
+            orig_shape (tuple[int, int]): 原始图像大小,格式为 (高度, 宽度)。
 
         Raises:
-            AssertionError: If the number of values per box is not 7 or 8.
+            AssertionError: 如果每个边界框的值数量不是 7 或 8。
         """
         if boxes.ndim == 1:
             boxes = boxes[None, :]
@@ -1376,11 +1368,11 @@ class OBB(BaseTensor):
 
     @property
     def xywhr(self) -> torch.Tensor | np.ndarray:
-        """Return boxes in [x_center, y_center, width, height, rotation] format.
+        """返回 [x_center, y_center, width, height, rotation] 格式的边界框。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or numpy array containing the oriented bounding boxes with format
-                [x_center, y_center, width, height, rotation]. The shape is (N, 5) where N is the number of boxes.
+            (torch.Tensor | np.ndarray): 包含有向边界框的张量或 numpy 数组,
+                格式为 [x_center, y_center, width, height, rotation]。形状为 (N, 5),其中 N 是边界框数量。
 
         Examples:
             >>> results = model("image.jpg")
@@ -1393,14 +1385,13 @@ class OBB(BaseTensor):
 
     @property
     def conf(self) -> torch.Tensor | np.ndarray:
-        """Return the confidence scores for Oriented Bounding Boxes (OBBs).
+        """返回有向边界框 (OBB) 的置信度分数。
 
-        This property retrieves the confidence values associated with each OBB detection. The confidence score
-        represents the model's certainty in the detection.
+        该属性检索与每个 OBB 检测相关的置信度值。置信度分数表示模型对检测的确定性。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or numpy array of shape (N,) containing confidence scores for N
-                detections, where each score is in the range [0, 1].
+            (torch.Tensor | np.ndarray): 形状为 (N,) 的张量或 numpy 数组,包含 N 个检测的置信度分数,
+                每个分数在 [0, 1] 范围内。
 
         Examples:
             >>> results = model("image.jpg")
@@ -1412,11 +1403,11 @@ class OBB(BaseTensor):
 
     @property
     def cls(self) -> torch.Tensor | np.ndarray:
-        """Return the class values of the oriented bounding boxes.
+        """返回有向边界框的类别值。
 
         Returns:
-            (torch.Tensor | np.ndarray): A tensor or numpy array containing the class values for each oriented bounding
-                box. The shape is (N,), where N is the number of boxes.
+            (torch.Tensor | np.ndarray): 包含每个有向边界框的类别值的张量或 numpy 数组。
+                形状为 (N,),其中 N 是边界框数量。
 
         Examples:
             >>> results = model("image.jpg")
@@ -1429,14 +1420,14 @@ class OBB(BaseTensor):
 
     @property
     def id(self) -> torch.Tensor | np.ndarray | None:
-        """Return the tracking IDs of the oriented bounding boxes (if available).
+        """返回有向边界框的跟踪 ID(如果可用)。
 
         Returns:
-            (torch.Tensor | np.ndarray | None): A tensor or numpy array containing the tracking IDs for each oriented
-                bounding box. Returns None if tracking IDs are not available.
+            (torch.Tensor | np.ndarray | None): 包含每个有向边界框的跟踪 ID 的张量或 numpy 数组。
+                如果跟踪 ID 不可用,则返回 None。
 
         Examples:
-            >>> results = model("image.jpg", tracker=True)  # Run inference with tracking
+            >>> results = model("image.jpg", tracker=True)  # 使用跟踪运行推理
             >>> for result in results:
             ...     if result.obb is not None:
             ...         track_ids = result.obb.id
@@ -1448,12 +1439,11 @@ class OBB(BaseTensor):
     @property
     @lru_cache(maxsize=2)
     def xyxyxyxy(self) -> torch.Tensor | np.ndarray:
-        """Convert OBB format to 8-point (xyxyxyxy) coordinate format for rotated bounding boxes.
+        """将 OBB 格式转换为旋转边界框的 8 点 (xyxyxyxy) 坐标格式。
 
         Returns:
-            (torch.Tensor | np.ndarray): Rotated bounding boxes in xyxyxyxy format with shape (N, 4, 2), where N is the
-                number of boxes. Each box is represented by 4 points (x, y), starting from the top-left corner and
-                moving clockwise.
+            (torch.Tensor | np.ndarray): xyxyxyxy 格式的旋转边界框,形状为 (N, 4, 2),其中 N 是边界框数量。
+                每个边界框由 4 个点 (x, y) 表示,从左上角开始顺时针移动。
 
         Examples:
             >>> obb = OBB(torch.tensor([[100, 100, 50, 30, 0.5, 0.9, 0]]), orig_shape=(640, 640))
@@ -1466,15 +1456,14 @@ class OBB(BaseTensor):
     @property
     @lru_cache(maxsize=2)
     def xyxyxyxyn(self) -> torch.Tensor | np.ndarray:
-        """Convert rotated bounding boxes to normalized xyxyxyxy format.
+        """将旋转边界框转换为归一化的 xyxyxyxy 格式。
 
         Returns:
-            (torch.Tensor | np.ndarray): Normalized rotated bounding boxes in xyxyxyxy format with shape (N, 4, 2),
-                where N is the number of boxes. Each box is represented by 4 points (x, y), normalized relative to the
-                original image dimensions.
+            (torch.Tensor | np.ndarray): xyxyxyxy 格式的归一化旋转边界框,形状为 (N, 4, 2),
+                其中 N 是边界框数量。每个边界框由 4 个点 (x, y) 表示,相对于原始图像尺寸进行归一化。
 
         Examples:
-            >>> obb = OBB(torch.rand(10, 7), orig_shape=(640, 480))  # 10 random OBBs
+            >>> obb = OBB(torch.rand(10, 7), orig_shape=(640, 480))  # 10 个随机 OBB
             >>> normalized_boxes = obb.xyxyxyxyn
             >>> print(normalized_boxes.shape)
             torch.Size([10, 4, 2])
@@ -1487,15 +1476,14 @@ class OBB(BaseTensor):
     @property
     @lru_cache(maxsize=2)
     def xyxy(self) -> torch.Tensor | np.ndarray:
-        """Convert oriented bounding boxes (OBB) to axis-aligned bounding boxes in xyxy format.
+        """将有向边界框 (OBB) 转换为 xyxy 格式的轴对齐边界框。
 
-        This property calculates the minimal enclosing rectangle for each oriented bounding box and returns it in xyxy
-        format (x1, y1, x2, y2). This is useful for operations that require axis-aligned bounding boxes, such as IoU
-        calculation with non-rotated boxes.
+        该属性计算每个有向边界框的最小外接矩形,并以 xyxy 格式 (x1, y1, x2, y2) 返回。
+        这对于需要轴对齐边界框的操作很有用,例如与非旋转边界框的 IoU 计算。
 
         Returns:
-            (torch.Tensor | np.ndarray): Axis-aligned bounding boxes in xyxy format with shape (N, 4), where N is the
-                number of boxes. Each row contains [x1, y1, x2, y2] coordinates.
+            (torch.Tensor | np.ndarray): xyxy 格式的轴对齐边界框,形状为 (N, 4),其中 N 是边界框数量。
+                每行包含 [x1, y1, x2, y2] 坐标。
 
         Examples:
             >>> import torch
@@ -1509,9 +1497,9 @@ class OBB(BaseTensor):
             ...         print(xyxy_boxes.shape)  # (N, 4)
 
         Notes:
-            - This method approximates the OBB by its minimal enclosing rectangle.
-            - The returned format is compatible with standard object detection metrics and visualization tools.
-            - The property uses caching to improve performance for repeated access.
+            - 该方法通过最小外接矩形近似 OBB。
+            - 返回的格式与标准目标检测指标和可视化工具兼容。
+            - 该属性使用缓存以提高重复访问的性能。
         """
         x = self.xyxyxyxy[..., 0]
         y = self.xyxyxyxy[..., 1]

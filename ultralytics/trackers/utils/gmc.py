@@ -1,13 +1,45 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+全局运动补偿（GMC）模块
 
-from __future__ import annotations
+此模块实现了全局运动补偿算法，用于补偿摄像头运动对目标追踪的影响。
+当摄像头移动、旋转或抖动时，GMC 能估计帧间的变换矩阵，校正追踪预测。
 
-import copy
+主要类:
+    - GMC: 全局运动补偿类，支持多种运动估计算法
 
-import cv2
-import numpy as np
+支持的算法:
+    - ORB: Oriented FAST and Rotated BRIEF 特征匹配
+    - SIFT: Scale-Invariant Feature Transform 特征匹配
+    - ECC: Enhanced Correlation Coefficient 图像对齐
+    - sparseOptFlow: 稀疏光流法（默认，速度快）
 
-from ultralytics.utils import LOGGER
+核心功能:
+    - apply: 对输入帧应用运动补偿，返回变换矩阵
+    - apply_ecc: 使用 ECC 算法估计变换
+    - apply_features: 使用特征匹配估计变换
+    - apply_sparseoptflow: 使用光流法估计变换
+
+使用场景:
+    - 移动摄像头追踪（无人机、行车记录仪等）
+    - 手持设备拍摄的视频追踪
+    - 需要补偿相机抖动的场景
+
+数学原理:
+    GMC 估计一个 2×3 的仿射变换矩阵 H:
+        [x']   [a  b  tx] [x]
+        [y'] = [c  d  ty] [y]
+        [1 ]   [0  0  1 ] [1]
+    其中 (a,b,c,d) 是旋转和缩放，(tx,ty) 是平移
+"""
+
+from __future__ import annotations  # 启用延迟类型注解
+
+import copy  # 深拷贝工具
+
+import cv2  # OpenCV 计算机视觉库
+import numpy as np  # 数值计算
+
+from ultralytics.utils import LOGGER  # 日志记录器
 
 
 class GMC:

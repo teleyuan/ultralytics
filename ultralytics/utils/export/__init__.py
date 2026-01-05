@@ -1,4 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 from .engine import onnx2engine, torch2onnx
 from .imx import torch2imx

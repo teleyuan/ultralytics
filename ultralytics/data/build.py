@@ -1,41 +1,74 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+数据加载器构建模块
 
-from __future__ import annotations
+该模块提供构建训练和推理数据加载器的核心功能。
 
-import math
-import os
-import random
-from collections.abc import Iterator
-from pathlib import Path
-from typing import Any
-from urllib.parse import urlsplit
+主要功能:
+    - build_dataloader: 构建训练用的 DataLoader
+    - build_yolo_dataset: 构建 YOLO 数据集
+    - build_grounding: 构建 Grounding 任务数据集
+    - load_inference_source: 加载各种推理数据源
+    - InfiniteDataLoader: 支持无限循环的 DataLoader
 
-import numpy as np
-import torch
-import torch.distributed as dist
-from PIL import Image
-from torch.utils.data import Dataset, dataloader, distributed
+支持的数据源:
+    - 图像文件和目录
+    - 视频文件
+    - 网络流 (RTSP/RTMP/HTTP)
+    - 屏幕截图
+    - PIL/Numpy 数组
+    - Torch 张量
 
-from ultralytics.cfg import IterableSimpleNamespace
+典型应用场景:
+    - 训练数据加载
+    - 推理数据加载
+    - 分布式训练数据采样
+"""
+
+from __future__ import annotations  # 启用延迟类型注解评估
+
+import math  # 数学运算
+import os  # 操作系统接口
+import random  # 随机数生成
+from collections.abc import Iterator  # 迭代器抽象基类
+from pathlib import Path  # 跨平台路径操作
+from typing import Any  # 类型注解
+from urllib.parse import urlsplit  # URL 解析
+
+import numpy as np  # 数值计算
+import torch  # PyTorch 深度学习框架
+import torch.distributed as dist  # PyTorch 分布式训练
+from PIL import Image  # PIL 图像处理
+from torch.utils.data import Dataset, dataloader, distributed  # PyTorch 数据加载工具
+
+from ultralytics.cfg import IterableSimpleNamespace  # 配置命名空间
+# 导入数据集类
 from ultralytics.data.dataset import GroundingDataset, YOLODataset, YOLOMultiModalDataset
+# 导入各种数据加载器
 from ultralytics.data.loaders import (
-    LOADERS,
-    LoadImagesAndVideos,
-    LoadPilAndNumpy,
-    LoadScreenshots,
-    LoadStreams,
-    LoadTensor,
-    SourceTypes,
-    autocast_list,
+    LOADERS,  # 加载器注册表
+    LoadImagesAndVideos,  # 图像和视频加载器
+    LoadPilAndNumpy,  # PIL/Numpy 加载器
+    LoadScreenshots,  # 屏幕截图加载器
+    LoadStreams,  # 视频流加载器
+    LoadTensor,  # 张量加载器
+    SourceTypes,  # 数据源类型枚举
+    autocast_list,  # 自动类型转换列表
 )
+# 导入图像和视频格式常量
 from ultralytics.data.utils import IMG_FORMATS, VID_FORMATS
-from ultralytics.utils import RANK, colorstr
-from ultralytics.utils.checks import check_file
-from ultralytics.utils.torch_utils import TORCH_2_0
+from ultralytics.utils import RANK, colorstr  # 分布式训练排名和彩色字符串
+from ultralytics.utils.checks import check_file  # 文件检查
+from ultralytics.utils.torch_utils import TORCH_2_0  # PyTorch 版本检查
 
 
 class InfiniteDataLoader(dataloader.DataLoader):
-    """DataLoader that reuses workers for infinite iteration.
+    """
+    支持无限迭代的 DataLoader，复用工作进程
+
+    该 DataLoader 扩展了 PyTorch 的 DataLoader，提供无限循环的工作进程复用功能。
+    这在需要多次迭代数据集的训练循环中可以提高效率，避免重复创建工作进程。
+
+    DataLoader that reuses workers for infinite iteration.
 
     This dataloader extends the PyTorch DataLoader to provide infinite recycling of workers, which improves efficiency
     for training loops that need to iterate through the dataset multiple times without recreating workers.
@@ -59,11 +92,18 @@ class InfiniteDataLoader(dataloader.DataLoader):
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
-        """Initialize the InfiniteDataLoader with the same arguments as DataLoader."""
+        """
+        使用与 DataLoader 相同的参数初始化 InfiniteDataLoader
+
+        Initialize the InfiniteDataLoader with the same arguments as DataLoader.
+        """
         if not TORCH_2_0:
-            kwargs.pop("prefetch_factor", None)  # not supported by earlier versions
+            # 早期版本不支持 prefetch_factor 参数
+            kwargs.pop("prefetch_factor", None)
         super().__init__(*args, **kwargs)
+        # 使用无限重复采样器包装原始的批次采样器
         object.__setattr__(self, "batch_sampler", _RepeatSampler(self.batch_sampler))
+        # 创建迭代器
         self.iterator = super().__iter__()
 
     def __len__(self) -> int:

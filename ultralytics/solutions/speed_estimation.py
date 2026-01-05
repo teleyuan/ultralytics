@@ -1,5 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 from collections import deque
 from math import sqrt
 from typing import Any
@@ -9,66 +7,91 @@ from ultralytics.utils.plotting import colors
 
 
 class SpeedEstimator(BaseSolution):
-    """A class to estimate the speed of objects in a real-time video stream based on their tracks.
+    """
+    速度估计器(SpeedEstimator)类：基于目标轨迹在实时视频流中估计目标速度
 
-    This class extends the BaseSolution class and provides functionality for estimating object speeds using tracking
-    data in video streams. Speed is calculated based on pixel displacement over time and converted to real-world units
-    using a configurable meters-per-pixel scale factor.
+    该类继承自BaseSolution类，使用视频流中的追踪数据提供目标速度估计功能。
+    速度计算基于像素位移随时间的变化，并通过可配置的米/像素比例因子转换为真实世界单位。
 
-    Attributes:
-        fps (float): Video frame rate for time calculations.
-        frame_count (int): Global frame counter for tracking temporal information.
-        trk_frame_ids (dict): Maps track IDs to their first frame index.
-        spd (dict): Final speed per object in km/h once locked.
-        trk_hist (dict): Maps track IDs to deque of position history.
-        locked_ids (set): Track IDs whose speed has been finalized.
-        max_hist (int): Required frame history before computing speed.
-        meter_per_pixel (float): Real-world meters represented by one pixel for scene scale conversion.
-        max_speed (int): Maximum allowed object speed; values above this will be capped.
+    核心原理：
+    1. 追踪目标在多帧中的位置历史
+    2. 计算起始点和结束点之间的像素距离
+    3. 根据帧率计算时间间隔
+    4. 将像素距离转换为实际距离（米）
+    5. 使用公式 速度 = 距离/时间 * 3.6 转换为 km/h
 
-    Methods:
-        process: Process input frames to estimate object speeds based on tracking data.
-        store_tracking_history: Store the tracking history for an object.
-        extract_tracks: Extract tracks from the current frame.
-        display_output: Display the output with annotations.
+    属性:
+        fps (float): 视频帧率，用于时间计算
+        frame_count (int): 全局帧计数器，用于追踪时间信息
+        trk_frame_ids (dict): 将追踪ID映射到其首次出现的帧索引
+        spd (dict): 每个目标的最终速度(km/h)，一旦锁定不再更新
+        trk_hist (dict): 将追踪ID映射到位置历史的双端队列
+        locked_ids (set): 速度已确定的追踪ID集合
+        max_hist (int): 计算速度前所需的最小帧历史数量
+        meter_per_pixel (float): 一个像素代表的实际世界距离（米），用于场景比例转换
+        max_speed (int): 允许的最大目标速度，超过此值将被限制
 
-    Examples:
-        Initialize speed estimator and process a frame
+    方法:
+        process: 处理输入帧，基于追踪数据估计目标速度
+        store_tracking_history: 存储目标的追踪历史
+        extract_tracks: 从当前帧提取追踪轨迹
+        display_output: 显示带有标注的输出
+
+    使用示例:
+        >>> from ultralytics.solutions import SpeedEstimator
         >>> estimator = SpeedEstimator(meter_per_pixel=0.04, max_speed=120)
         >>> frame = cv2.imread("frame.jpg")
         >>> results = estimator.process(frame)
-        >>> cv2.imshow("Speed Estimation", results.plot_im)
+        >>> cv2.imshow("速度估计", results.plot_im)
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        """Initialize the SpeedEstimator object with speed estimation parameters and data structures.
+        """
+        初始化SpeedEstimator对象，配置速度估计参数和数据结构
 
         Args:
-            **kwargs (Any): Additional keyword arguments passed to the parent class.
+            **kwargs (Any): 传递给父类的关键字参数，包括:
+                - fps: 视频帧率（默认25）
+                - max_hist: 速度计算所需的历史帧数（默认30）
+                - meter_per_pixel: 像素到米的转换比例（需根据相机参数设定）
+                - max_speed: 最大速度限制（km/h）
         """
         super().__init__(**kwargs)
 
-        self.fps = self.CFG["fps"]  # Video frame rate for time calculations
-        self.frame_count = 0  # Global frame counter
-        self.trk_frame_ids = {}  # Track ID → first frame index
-        self.spd = {}  # Final speed per object (km/h), once locked
-        self.trk_hist = {}  # Track ID → deque of (time, position)
-        self.locked_ids = set()  # Track IDs whose speed has been finalized
-        self.max_hist = self.CFG["max_hist"]  # Required frame history before computing speed
-        self.meter_per_pixel = self.CFG["meter_per_pixel"]  # Scene scale, depends on camera details
-        self.max_speed = self.CFG["max_speed"]  # Maximum speed adjustment
+        self.fps = self.CFG["fps"]  # 视频帧率，用于时间计算
+        self.frame_count = 0  # 全局帧计数器
+        self.trk_frame_ids = {}  # 追踪ID → 首次出现的帧索引
+        self.spd = {}  # 每个目标的最终速度(km/h)，一旦锁定不再更新
+        self.trk_hist = {}  # 追踪ID → 位置历史的双端队列 (时间, 位置)
+        self.locked_ids = set()  # 速度已确定的追踪ID集合
+        self.max_hist = self.CFG["max_hist"]  # 计算速度前所需的帧历史数量
+        self.meter_per_pixel = self.CFG["meter_per_pixel"]  # 场景比例，取决于相机参数
+        self.max_speed = self.CFG["max_speed"]  # 最大速度限制
 
     def process(self, im0) -> SolutionResults:
-        """Process an input frame to estimate object speeds based on tracking data.
+        """
+        处理输入帧，基于追踪数据估计目标速度
+
+        该方法实现完整的速度估计流程：
+        1. 提取当前帧的目标追踪信息
+        2. 更新每个目标的位置历史
+        3. 当积累足够历史帧后，计算速度：
+           - 获取起始和结束位置
+           - 计算像素距离：sqrt((x1-x0)² + (y1-y0)²)
+           - 转换为实际距离：像素距离 × 米/像素
+           - 计算速度：(距离/时间) × 3.6 转换为 km/h
+        4. 锁定已计算的速度，释放历史数据
+        5. 在图像上标注速度信息
 
         Args:
-            im0 (np.ndarray): Input image for processing with shape (H, W, C) in OpenCV BGR format.
+            im0 (np.ndarray): 待处理的输入图像，形状为 (H, W, C)，OpenCV BGR格式
 
         Returns:
-            (SolutionResults): Contains processed image `plot_im` and `total_tracks` (number of tracked objects).
+            (SolutionResults): 包含以下信息的结果对象：
+                - plot_im: 带有速度标注的处理后图像
+                - total_tracks: 追踪的目标数量
 
-        Examples:
-            Process a frame for speed estimation
+        使用示例:
             >>> estimator = SpeedEstimator()
             >>> image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
             >>> results = estimator.process(image)
@@ -80,35 +103,35 @@ class SpeedEstimator(BaseSolution):
         for box, track_id, _, _ in zip(self.boxes, self.track_ids, self.clss, self.confs):
             self.store_tracking_history(track_id, box)
 
-            if track_id not in self.trk_hist:  # Initialize history if new track found
+            if track_id not in self.trk_hist:  # 如果是新追踪目标，初始化历史记录
                 self.trk_hist[track_id] = deque(maxlen=self.max_hist)
                 self.trk_frame_ids[track_id] = self.frame_count
 
-            if track_id not in self.locked_ids:  # Update history until speed is locked
+            if track_id not in self.locked_ids:  # 在速度锁定前持续更新历史
                 trk_hist = self.trk_hist[track_id]
                 trk_hist.append(self.track_line[-1])
 
-                # Compute and lock speed once enough history is collected
+                # 一旦收集到足够的历史数据，计算并锁定速度
                 if len(trk_hist) == self.max_hist:
-                    p0, p1 = trk_hist[0], trk_hist[-1]  # First and last points of track
-                    dt = (self.frame_count - self.trk_frame_ids[track_id]) / self.fps  # Time in seconds
+                    p0, p1 = trk_hist[0], trk_hist[-1]  # 轨迹的起始点和结束点
+                    dt = (self.frame_count - self.trk_frame_ids[track_id]) / self.fps  # 时间间隔（秒）
                     if dt > 0:
-                        dx, dy = p1[0] - p0[0], p1[1] - p0[1]  # Pixel displacement
-                        pixel_distance = sqrt(dx * dx + dy * dy)  # Calculate pixel distance
-                        meters = pixel_distance * self.meter_per_pixel  # Convert to meters
+                        dx, dy = p1[0] - p0[0], p1[1] - p0[1]  # 像素位移
+                        pixel_distance = sqrt(dx * dx + dy * dy)  # 计算像素距离
+                        meters = pixel_distance * self.meter_per_pixel  # 转换为米
                         self.spd[track_id] = int(
                             min((meters / dt) * 3.6, self.max_speed)
-                        )  # Convert to km/h and store final speed
-                        self.locked_ids.add(track_id)  # Prevent further updates
-                        self.trk_hist.pop(track_id, None)  # Free memory
-                        self.trk_frame_ids.pop(track_id, None)  # Remove frame start reference
+                        )  # 转换为 km/h 并存储最终速度（限制在最大速度内）
+                        self.locked_ids.add(track_id)  # 防止进一步更新
+                        self.trk_hist.pop(track_id, None)  # 释放内存
+                        self.trk_frame_ids.pop(track_id, None)  # 移除帧起始引用
 
             if track_id in self.spd:
                 speed_label = f"{self.spd[track_id]} km/h"
-                annotator.box_label(box, label=speed_label, color=colors(track_id, True))  # Draw bounding box
+                annotator.box_label(box, label=speed_label, color=colors(track_id, True))  # 绘制边界框和速度标签
 
         plot_im = annotator.result()
-        self.display_output(plot_im)  # Display output with base class function
+        self.display_output(plot_im)  # 使用基类函数显示输出
 
-        # Return results with processed image and tracking summary
+        # 返回包含处理图像和追踪摘要的结果
         return SolutionResults(plot_im=plot_im, total_tracks=len(self.track_ids))

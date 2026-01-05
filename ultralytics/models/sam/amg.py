@@ -1,14 +1,39 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+AMG (Automatic Mask Generation) 自动掩码生成模块
 
-from __future__ import annotations
+该模块提供了 SAM 模型的自动掩码生成功能，用于在无提示的情况下自动分割图像中的所有对象。
+AMG 通过在图像上密集采样点并使用 SAM 预测掩码，然后进行后处理以生成最终的分割结果。
 
-import math
-from collections.abc import Generator
-from itertools import product
-from typing import Any
+主要功能:
+    - 自动在图像上生成点网格作为提示
+    - 批量处理多个提示点
+    - 计算掩码的稳定性分数
+    - 掩码的非极大值抑制（NMS）
+    - 处理边界框和裁剪区域
+    - 生成掩码质量预测
 
-import numpy as np
-import torch
+核心算法:
+    1. 在图像上生成均匀分布的点网格
+    2. 对每个点使用 SAM 模型预测掩码
+    3. 计算掩码稳定性和质量分数
+    4. 应用 NMS 去除重复掩码
+    5. 后处理和优化掩码边界
+
+典型应用:
+    - 自动图像分割
+    - 实例分割数据集生成
+    - 图像中所有对象的自动标注
+"""
+
+from __future__ import annotations  # 启用延迟类型注解评估
+
+import math  # 数学函数
+from collections.abc import Generator  # 生成器类型提示
+from itertools import product  # 笛卡尔积生成器
+from typing import Any  # 任意类型提示
+
+import numpy as np  # 数组处理
+import torch  # PyTorch 深度学习框架
 
 
 def is_box_near_crop_edge(

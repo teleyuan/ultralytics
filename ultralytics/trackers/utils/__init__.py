@@ -1,1 +1,10 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+追踪工具模块初始化文件
+
+此模块包含目标追踪所需的工具类和函数：
+    - kalman_filter: 卡尔曼滤波器（状态预测与更新）
+    - gmc: 全局运动补偿（摄像头运动补偿）
+    - matching: 数据关联算法（匈牙利算法、距离计算等）
+
+这些工具为 ByteTrack 和 BOTSort 等追踪算法提供底层支持。
+"""

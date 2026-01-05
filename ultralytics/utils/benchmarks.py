@@ -1,13 +1,13 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
+对 YOLO 模型格式进行速度和精度基准测试。
 Benchmark YOLO model formats for speed and accuracy.
 
-Usage:
+使用方法 (Usage):
     from ultralytics.utils.benchmarks import ProfileModels, benchmark
     ProfileModels(['yolo11n.yaml', 'yolov8s.yaml']).run()
     benchmark(model='yolo11n.pt', imgsz=160)
 
-Format                  | `format=argument`         | Model
+格式 (Format)           | `format=argument`         | 模型 (Model)
 ---                     | ---                       | ---
 PyTorch                 | -                         | yolo11n.pt
 TorchScript             | `torchscript`             | yolo11n.torchscript
@@ -28,27 +28,27 @@ RKNN                    | `rknn`                    | yolo11n_rknn_model/
 ExecuTorch              | `executorch`              | yolo11n_executorch_model/
 """
 
-from __future__ import annotations
+from __future__ import annotations  # 支持类型注解的前向引用
 
-import glob
-import os
-import platform
-import re
-import shutil
-import time
-from pathlib import Path
+import glob  # 文件路径模式匹配
+import os  # 操作系统接口
+import platform  # 平台信息获取
+import re  # 正则表达式操作
+import shutil  # 高级文件操作
+import time  # 时间相关功能
+from pathlib import Path  # 面向对象的文件路径操作
 
-import numpy as np
-import torch.cuda
+import numpy as np  # 数值计算库
+import torch.cuda  # PyTorch CUDA 支持
 
-from ultralytics import YOLO, YOLOWorld
-from ultralytics.cfg import TASK2DATA, TASK2METRIC
-from ultralytics.engine.exporter import export_formats
-from ultralytics.utils import ARM64, ASSETS, ASSETS_URL, IS_JETSON, LINUX, LOGGER, MACOS, TQDM, WEIGHTS_DIR, YAML
-from ultralytics.utils.checks import IS_PYTHON_3_13, check_imgsz, check_requirements, check_yolo, is_rockchip
-from ultralytics.utils.downloads import safe_download
-from ultralytics.utils.files import file_size
-from ultralytics.utils.torch_utils import get_cpu_info, select_device
+from ultralytics import YOLO, YOLOWorld  # YOLO 模型类
+from ultralytics.cfg import TASK2DATA, TASK2METRIC  # 任务到数据集和指标的映射
+from ultralytics.engine.exporter import export_formats  # 模型导出格式定义
+from ultralytics.utils import ARM64, ASSETS, ASSETS_URL, IS_JETSON, LINUX, LOGGER, MACOS, TQDM, WEIGHTS_DIR, YAML  # 通用工具和常量
+from ultralytics.utils.checks import IS_PYTHON_3_13, check_imgsz, check_requirements, check_yolo, is_rockchip  # 检查函数
+from ultralytics.utils.downloads import safe_download  # 安全下载函数
+from ultralytics.utils.files import file_size  # 文件大小计算
+from ultralytics.utils.torch_utils import get_cpu_info, select_device  # PyTorch 工具函数
 
 
 def benchmark(
@@ -63,62 +63,73 @@ def benchmark(
     format="",
     **kwargs,
 ):
-    """Benchmark a YOLO model across different formats for speed and accuracy.
+    """
+    对 YOLO 模型在不同格式下进行速度和精度基准测试。
+    Benchmark a YOLO model across different formats for speed and accuracy.
 
     Args:
-        model (str | Path): Path to the model file or directory.
-        data (str | None): Dataset to evaluate on, inherited from TASK2DATA if not passed.
-        imgsz (int): Image size for the benchmark.
-        half (bool): Use half-precision for the model if True.
-        int8 (bool): Use int8-precision for the model if True.
-        device (str): Device to run the benchmark on, either 'cpu' or 'cuda'.
-        verbose (bool | float): If True or a float, assert benchmarks pass with given metric.
-        eps (float): Epsilon value for divide by zero prevention.
-        format (str): Export format for benchmarking. If not supplied all formats are benchmarked.
-        **kwargs (Any): Additional keyword arguments for exporter.
+        model (str | Path): 模型文件或目录的路径 (Path to the model file or directory)
+        data (str | None): 用于评估的数据集，如果未传递则从 TASK2DATA 继承 (Dataset to evaluate on, inherited from TASK2DATA if not passed)
+        imgsz (int): 基准测试的图像大小 (Image size for the benchmark)
+        half (bool): 如果为 True，则使用半精度模型 (Use half-precision for the model if True)
+        int8 (bool): 如果为 True，则使用 int8 精度模型 (Use int8-precision for the model if True)
+        device (str): 运行基准测试的设备，'cpu' 或 'cuda' (Device to run the benchmark on, either 'cpu' or 'cuda')
+        verbose (bool | float): 如果为 True 或浮点数，则断言基准测试通过给定指标 (If True or a float, assert benchmarks pass with given metric)
+        eps (float): 用于防止除零的 epsilon 值 (Epsilon value for divide by zero prevention)
+        format (str): 用于基准测试的导出格式。如果未提供，则测试所有格式 (Export format for benchmarking. If not supplied all formats are benchmarked)
+        **kwargs (Any): 导出器的其他关键字参数 (Additional keyword arguments for exporter)
 
     Returns:
-        (polars.DataFrame): A Polars DataFrame with benchmark results for each format, including file size, metric, and
-            inference time.
+        (polars.DataFrame): 包含每种格式的基准测试结果的 Polars DataFrame，包括文件大小、指标和推理时间
+            (A Polars DataFrame with benchmark results for each format, including file size, metric, and inference time)
 
     Examples:
-        Benchmark a YOLO model with default settings:
+        使用默认设置对 YOLO 模型进行基准测试 (Benchmark a YOLO model with default settings):
         >>> from ultralytics.utils.benchmarks import benchmark
         >>> benchmark(model="yolo11n.pt", imgsz=640)
     """
+    # 检查图像大小是否合法
     imgsz = check_imgsz(imgsz)
     assert imgsz[0] == imgsz[1] if isinstance(imgsz, list) else True, "benchmark() only supports square imgsz."
 
-    import polars as pl  # scope for faster 'import ultralytics'
+    import polars as pl  # 局部导入以加快 'import ultralytics' 的速度
 
-    pl.Config.set_tbl_cols(-1)  # Show all columns
-    pl.Config.set_tbl_rows(-1)  # Show all rows
-    pl.Config.set_tbl_width_chars(-1)  # No width limit
-    pl.Config.set_tbl_hide_column_data_types(True)  # Hide data types
-    pl.Config.set_tbl_hide_dataframe_shape(True)  # Hide shape info
-    pl.Config.set_tbl_formatting("ASCII_BORDERS_ONLY_CONDENSED")
+    # 配置 Polars DataFrame 的显示选项
+    pl.Config.set_tbl_cols(-1)  # 显示所有列
+    pl.Config.set_tbl_rows(-1)  # 显示所有行
+    pl.Config.set_tbl_width_chars(-1)  # 无宽度限制
+    pl.Config.set_tbl_hide_column_data_types(True)  # 隐藏数据类型
+    pl.Config.set_tbl_hide_dataframe_shape(True)  # 隐藏形状信息
+    pl.Config.set_tbl_formatting("ASCII_BORDERS_ONLY_CONDENSED")  # 设置表格格式
 
+    # 选择推理设备
     device = select_device(device, verbose=False)
+    # 如果模型是字符串或路径，则加载为 YOLO 模型对象
     if isinstance(model, (str, Path)):
         model = YOLO(model)
+    # 检查是否为端到端模型
     is_end2end = getattr(model.model.model[-1], "end2end", False)
-    data = data or TASK2DATA[model.task]  # task to dataset, i.e. coco8.yaml for task=detect
-    key = TASK2METRIC[model.task]  # task to metric, i.e. metrics/mAP50-95(B) for task=detect
+    # 获取任务对应的数据集和评估指标
+    data = data or TASK2DATA[model.task]  # 任务到数据集映射，如 detect 任务对应 coco8.yaml
+    key = TASK2METRIC[model.task]  # 任务到指标映射，如 detect 任务对应 metrics/mAP50-95(B)
 
-    y = []
-    t0 = time.time()
+    y = []  # 存储基准测试结果
+    t0 = time.time()  # 记录开始时间
 
+    # 检查指定的导出格式是否有效
     format_arg = format.lower()
     if format_arg:
         formats = frozenset(export_formats()["Argument"])
         assert format in formats, f"Expected format to be one of {formats}, but got '{format_arg}'."
+    # 遍历所有支持的导出格式
     for name, format, suffix, cpu, gpu, _ in zip(*export_formats().values()):
-        emoji, filename = "❌", None  # export defaults
+        emoji, filename = "❌", None  # 导出默认值：失败标记和空文件名
         try:
+            # 如果指定了格式但当前格式不匹配，则跳过
             if format_arg and format_arg != format:
                 continue
 
-            # Checks
+            # 对不同格式进行兼容性检查
             if format == "pb":
                 assert model.task != "obb", "TensorFlow GraphDef not supported for OBB task"
             elif format == "edgetpu":
@@ -161,28 +172,31 @@ def benchmark(
             if "cuda" in device.type:
                 assert gpu, "inference not supported on GPU"
 
-            # Export
+            # 导出模型到指定格式
             if format == "-":
+                # PyTorch 原始格式，无需导出
                 filename = model.pt_path or model.ckpt_path or model.model_name
                 exported_model = model  # PyTorch format
             else:
+                # 导出到其他格式
                 filename = model.export(
                     imgsz=imgsz, format=format, half=half, int8=int8, data=data, device=device, verbose=False, **kwargs
                 )
                 exported_model = YOLO(filename, task=model.task)
                 assert suffix in str(filename), "export failed"
-            emoji = "❎"  # indicates export succeeded
+            emoji = "❎"  # 表示导出成功
 
-            # Predict
+            # 进行预测测试
             assert model.task != "pose" or format != "pb", "GraphDef Pose inference is not supported"
             assert model.task != "pose" or format != "executorch", "ExecuTorch Pose inference is not supported"
             assert format not in {"edgetpu", "tfjs"}, "inference not supported"
             assert format != "coreml" or platform.system() == "Darwin", "inference only supported on macOS>=10.13"
             if format == "ncnn":
                 assert not is_end2end, "End-to-end torch.topk operation is not supported for NCNN prediction yet"
+            # 在测试图像上运行推理
             exported_model.predict(ASSETS / "bus.jpg", imgsz=imgsz, device=device, half=half, verbose=False)
 
-            # Validate
+            # 在验证集上进行评估
             results = exported_model.val(
                 data=data,
                 batch=1,
@@ -192,22 +206,25 @@ def benchmark(
                 half=half,
                 int8=int8,
                 verbose=False,
-                conf=0.001,  # all the pre-set benchmark mAP values are based on conf=0.001
+                conf=0.001,  # 所有预设的基准 mAP 值都基于 conf=0.001
             )
+            # 提取评估指标和推理速度
             metric, speed = results.results_dict[key], results.speed["inference"]
-            fps = round(1000 / (speed + eps), 2)  # frames per second
+            fps = round(1000 / (speed + eps), 2)  # 计算每秒帧数
             y.append([name, "✅", round(file_size(filename), 1), round(metric, 4), round(speed, 2), fps])
         except Exception as e:
+            # 捕获异常并记录失败信息
             if verbose:
                 assert type(e) is AssertionError, f"Benchmark failure for {name}: {e}"
             LOGGER.error(f"Benchmark failure for {name}: {e}")
             y.append([name, emoji, round(file_size(filename), 1), None, None, None])  # mAP, t_inference
 
-    # Print results
-    check_yolo(device=device)  # print system info
+    # 打印基准测试结果
+    check_yolo(device=device)  # 打印系统信息
+    # 创建 Polars DataFrame 存储结果
     df = pl.DataFrame(y, schema=["Format", "Status❔", "Size (MB)", key, "Inference time (ms/im)", "FPS"], orient="row")
-    df = df.with_row_index(" ", offset=1)  # add index info
-    df_display = df.with_columns(pl.all().cast(pl.String).fill_null("-"))
+    df = df.with_row_index(" ", offset=1)  # 添加索引信息
+    df_display = df.with_columns(pl.all().cast(pl.String).fill_null("-"))  # 格式化显示
 
     name = model.model_name
     dt = time.time() - t0

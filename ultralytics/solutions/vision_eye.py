@@ -1,5 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 from typing import Any
 
 from ultralytics.solutions.solutions import BaseSolution, SolutionAnnotator, SolutionResults
@@ -7,61 +5,70 @@ from ultralytics.utils.plotting import colors
 
 
 class VisionEye(BaseSolution):
-    """A class to manage object detection and vision mapping in images or video streams.
+    """
+    视觉眼(VisionEye)类：在图像或视频流中管理目标检测和视觉映射
 
-    This class extends the BaseSolution class and provides functionality for detecting objects, mapping vision points,
-    and annotating results with bounding boxes and labels.
+    该类继承自BaseSolution类，提供目标检测、视觉点映射以及用边界框和标签标注结果的功能。
+    主要用于从指定视点追踪和可视化目标运动轨迹。
 
-    Attributes:
-        vision_point (tuple[int, int]): Coordinates (x, y) where vision will view objects and draw tracks.
+    属性:
+        vision_point (tuple[int, int]): 视觉点坐标(x, y)，系统从该点观察目标并绘制轨迹
 
-    Methods:
-        process: Process the input image to detect objects, annotate them, and apply vision mapping.
+    方法:
+        process: 处理输入图像，检测目标，标注并应用视觉映射
 
-    Examples:
+    使用示例:
         >>> vision_eye = VisionEye()
         >>> frame = cv2.imread("frame.jpg")
         >>> results = vision_eye.process(frame)
-        >>> print(f"Total detected instances: {results.total_tracks}")
+        >>> print(f"检测到的实例总数: {results.total_tracks}")
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        """Initialize the VisionEye class for detecting objects and applying vision mapping.
+        """
+        初始化VisionEye类，用于目标检测和视觉映射
 
         Args:
-            **kwargs (Any): Keyword arguments passed to the parent class and for configuring vision_point.
+            **kwargs (Any): 传递给父类的关键字参数，用于配置vision_point等参数
         """
         super().__init__(**kwargs)
-        # Set the vision point where the system will view objects and draw tracks
+        # 设置视觉点：系统从该点观察目标并绘制轨迹
         self.vision_point = self.CFG["vision_point"]
 
     def process(self, im0) -> SolutionResults:
-        """Perform object detection, vision mapping, and annotation on the input image.
+        """
+        对输入图像执行目标检测、视觉映射和标注
+
+        该方法实现了完整的视觉眼处理流程：
+        1. 提取目标轨迹（边界框、类别和掩码）
+        2. 创建标注器并为每个目标绘制边界框和标签
+        3. 从视觉点绘制到每个目标的连线，形成视觉映射效果
+        4. 显示并返回标注结果
 
         Args:
-            im0 (np.ndarray): The input image for detection and annotation.
+            im0 (np.ndarray): 用于检测和标注的输入图像
 
         Returns:
-            (SolutionResults): Object containing the annotated image and tracking statistics.
-                - plot_im: Annotated output image with bounding boxes and vision mapping
-                - total_tracks: Number of tracked objects in the frame
+            (SolutionResults): 包含标注图像和追踪统计信息的对象
+                - plot_im: 带有边界框和视觉映射的标注输出图像
+                - total_tracks: 帧中追踪的目标数量
 
-        Examples:
+        使用示例:
             >>> vision_eye = VisionEye()
             >>> frame = cv2.imread("image.jpg")
             >>> results = vision_eye.process(frame)
-            >>> print(f"Detected {results.total_tracks} objects")
+            >>> print(f"检测到 {results.total_tracks} 个目标")
         """
-        self.extract_tracks(im0)  # Extract tracks (bounding boxes, classes, and masks)
+        self.extract_tracks(im0)  # 提取轨迹（边界框、类别和掩码）
         annotator = SolutionAnnotator(im0, self.line_width)
 
         for cls, t_id, box, conf in zip(self.clss, self.track_ids, self.boxes, self.confs):
-            # Annotate the image with bounding boxes, labels, and vision mapping
+            # 用边界框、标签和视觉映射标注图像
             annotator.box_label(box, label=self.adjust_box_label(cls, conf, t_id), color=colors(int(t_id), True))
             annotator.visioneye(box, self.vision_point)
 
         plot_im = annotator.result()
-        self.display_output(plot_im)  # Display the annotated output using the base class function
+        self.display_output(plot_im)  # 使用基类函数显示标注输出
 
-        # Return a SolutionResults object with the annotated image and tracking statistics
+        # 返回包含标注图像和追踪统计信息的SolutionResults对象
         return SolutionResults(plot_im=plot_im, total_tracks=len(self.track_ids))

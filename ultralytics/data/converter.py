@@ -1,27 +1,55 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+数据集格式转换模块
 
-from __future__ import annotations
+该模块提供各种数据集格式转换工具，支持将不同格式的标注数据转换为 YOLO 格式。
 
-import asyncio
-import json
-import random
-import shutil
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+主要功能:
+    - COCO 格式转 YOLO 格式
+    - DOTA 格式转 YOLO 格式（支持旋转边界框）
+    - 标签映射转换（91类到80类）
+    - 数据集合并与重组织
+    - 支持检测、分割、姿态估计等多种任务
 
-import cv2
-import numpy as np
-from PIL import Image
+支持的数据集格式:
+    - COCO (Common Objects in Context)
+    - DOTA (Dataset for Object deTection in Aerial images)
+    - 自定义 JSON 格式
 
+典型应用场景:
+    - 数据集预处理
+    - 多源数据集整合
+    - 格式标准化
+"""
+
+from __future__ import annotations  # 启用延迟类型注解评估
+
+import asyncio  # 异步 I/O 支持
+import json  # JSON 文件处理
+import random  # 随机数生成
+import shutil  # 文件和目录操作
+from collections import defaultdict  # 默认字典，用于统计
+from concurrent.futures import ThreadPoolExecutor, as_completed  # 线程池并发处理
+from pathlib import Path  # 跨平台路径操作
+
+import cv2  # OpenCV 图像处理
+import numpy as np  # 数值计算
+from PIL import Image  # PIL 图像处理
+
+# 导入 Ultralytics 工具函数和常量
 from ultralytics.utils import ASSETS_URL, DATASETS_DIR, LOGGER, NUM_THREADS, TQDM, YAML
-from ultralytics.utils.checks import check_file, check_requirements
-from ultralytics.utils.downloads import download, zip_directory
-from ultralytics.utils.files import increment_path
+from ultralytics.utils.checks import check_file, check_requirements  # 文件和依赖检查
+from ultralytics.utils.downloads import download, zip_directory  # 下载和压缩工具
+from ultralytics.utils.files import increment_path  # 路径自动增量
 
 
 def coco91_to_coco80_class() -> list[int]:
-    """Convert 91-index COCO class IDs to 80-index COCO class IDs.
+    """
+    将 91 类 COCO 类别 ID 转换为 80 类 COCO 类别 ID
+
+    COCO 数据集原始有 91 个类别 ID，但实际只使用了 80 个类别。
+    该函数返回映射表，将 80 类索引映射到对应的 91 类索引。
+
+    Convert 91-index COCO class IDs to 80-index COCO class IDs.
 
     Returns:
         (list[int]): A list of 91 class IDs where the index represents the 80-index class ID and the value is the
@@ -123,7 +151,10 @@ def coco91_to_coco80_class() -> list[int]:
 
 
 def coco80_to_coco91_class() -> list[int]:
-    r"""Convert 80-index (val2014) to 91-index (paper).
+    r"""
+    将 80 类 COCO 类别 ID (val2014) 转换为 91 类 COCO 类别 ID (论文版本)
+
+    Convert 80-index (val2014) to 91-index (paper).
 
     Returns:
         (list[int]): A list of 80 class IDs where each value is the corresponding 91-index class ID.
@@ -234,7 +265,12 @@ def convert_coco(
     cls91to80: bool = True,
     lvis: bool = False,
 ):
-    """Convert COCO dataset annotations to a YOLO annotation format suitable for training YOLO models.
+    """
+    将 COCO 数据集标注转换为 YOLO 标注格式
+
+    支持转换检测框、分割掩码和关键点标注。可选择将 91 类映射到 80 类。
+
+    Convert COCO dataset annotations to a YOLO annotation format suitable for training YOLO models.
 
     Args:
         labels_dir (str, optional): Path to directory containing COCO dataset annotation files.
@@ -253,30 +289,33 @@ def convert_coco(
         Convert LVIS annotations to YOLO format
         >>> convert_coco("lvis/annotations/", use_segments=True, use_keypoints=False, cls91to80=False, lvis=True)
     """
-    # Create dataset directory
-    save_dir = increment_path(save_dir)  # increment if save directory already exists
+    # 创建数据集目录
+    save_dir = increment_path(save_dir)  # 如果目录已存在则自动增量
     for p in save_dir / "labels", save_dir / "images":
-        p.mkdir(parents=True, exist_ok=True)  # make dir
+        p.mkdir(parents=True, exist_ok=True)
 
-    # Convert classes
+    # 获取类别映射表（91类到80类）
     coco80 = coco91_to_coco80_class()
 
-    # Import json
+    # 遍历所有 JSON 标注文件
     for json_file in sorted(Path(labels_dir).resolve().glob("*.json")):
+        # 生成标签目录名称
         lname = "" if lvis else json_file.stem.replace("instances_", "")
-        fn = Path(save_dir) / "labels" / lname  # folder name
+        fn = Path(save_dir) / "labels" / lname
         fn.mkdir(parents=True, exist_ok=True)
         if lvis:
+            # 注意: LVIS 验证集包含 COCO 2017 训练集的图像，因此需要预先创建两个目录
             # NOTE: create folders for both train and val in advance,
             # since LVIS val set contains images from COCO 2017 train in addition to the COCO 2017 val split.
             (fn / "train2017").mkdir(parents=True, exist_ok=True)
             (fn / "val2017").mkdir(parents=True, exist_ok=True)
+        # 读取 JSON 标注文件
         with open(json_file, encoding="utf-8") as f:
             data = json.load(f)
 
-        # Create image dict
+        # 创建图像 ID 到图像信息的字典
         images = {f"{x['id']:d}": x for x in data["images"]}
-        # Create image-annotations dict
+        # 创建图像 ID 到标注列表的字典（一张图可能有多个标注）
         annotations = defaultdict(list)
         for ann in data["annotations"]:
             annotations[ann["image_id"]].append(ann)
@@ -420,7 +459,12 @@ def convert_segment_masks_to_yolo_seg(masks_dir: str, output_dir: str, classes: 
 
 
 def convert_dota_to_yolo_obb(dota_root_path: str):
-    """Convert DOTA dataset annotations to YOLO OBB (Oriented Bounding Box) format.
+    """
+    将 DOTA 数据集标注转换为 YOLO OBB (旋转边界框) 格式
+
+    处理 DOTA 数据集的 'train' 和 'val' 文件夹中的图像，读取原始标签并转换为 YOLO OBB 格式。
+
+    Convert DOTA dataset annotations to YOLO OBB (Oriented Bounding Box) format.
 
     The function processes images in the 'train' and 'val' folders of the DOTA dataset. For each image, it reads the
     associated label from the original labels directory and writes new labels in YOLO OBB format to a new directory.

@@ -1,30 +1,83 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+Ultralytics 操作函数模块
 
-from __future__ import annotations
+该模块包含了 YOLO 模型中使用的核心数学和图像处理操作函数。
+这些函数涵盖了边界框操作、坐标转换、非极大值抑制 (NMS)、图像缩放等关键功能。
 
-import contextlib
-import math
-import re
-import time
+主要功能:
+    - 边界框操作: 格式转换、缩放、裁剪、IoU 计算等
+    - 坐标变换: xyxy/xywh/ltwh 等格式相互转换
+    - 非极大值抑制: NMS 和 Soft-NMS 实现
+    - 图像处理: 仿射变换、letterbox、scale_image 等
+    - 分割操作: mask 处理、多边形转换、crop 等
+    - 性能分析: Profile 类用于代码执行计时
 
-import cv2
-import numpy as np
-import torch
-import torch.nn.functional as F
+核心类:
+    - Profile: 代码性能分析和计时工具
 
-from ultralytics.utils import NOT_MACOS14
+核心函数:
+    - xyxy2xywh/xywh2xyxy: 边界框格式转换
+    - scale_boxes/scale_coords: 边界框坐标缩放
+    - clip_boxes/clip_coords: 边界框坐标裁剪
+    - non_max_suppression: 非极大值抑制
+    - box_iou: 边界框 IoU 计算
+    - masks2segments: mask 转分割多边形
+
+算法说明:
+    - NMS: 移除重叠度高的冗余检测框
+    - IoU (Intersection over Union): 计算框重叠度
+    - Affine Transform: 仿射变换用于数据增强
+"""
+
+from __future__ import annotations  # 支持 Python 3.7+ 的类型注解
+
+# 标准库导入
+import contextlib  # 上下文管理器工具
+import math  # 数学函数
+import re  # 正则表达式
+import time  # 时间函数
+
+# 第三方库导入
+import cv2  # OpenCV - 图像处理
+import numpy as np  # NumPy - 数值计算
+import torch  # PyTorch - 深度学习框架
+import torch.nn.functional as F  # PyTorch 函数式 API
+
+# Ultralytics 内部导入
+from ultralytics.utils import NOT_MACOS14  # macOS 14 版本检测标志
 
 
 class Profile(contextlib.ContextDecorator):
-    """Ultralytics Profile class for timing code execution.
+    """
+    Ultralytics 性能分析类 - 用于代码执行计时
+    Ultralytics Profile class for timing code execution.
+
+    可作为装饰器 @Profile() 或上下文管理器 'with Profile():' 使用。
+    提供精确的计时测量，支持 GPU 操作的 CUDA 同步。
 
     Use as a decorator with @Profile() or as a context manager with 'with Profile():'. Provides accurate timing
     measurements with CUDA synchronization support for GPU operations.
+
+    属性:
+        t (float): 累积时间 (秒)
+        device (torch.device): 用于模型推理的设备
+        cuda (bool): 是否使用 CUDA 进行时间同步
 
     Attributes:
         t (float): Accumulated time in seconds.
         device (torch.device): Device used for model inference.
         cuda (bool): Whether CUDA is being used for timing synchronization.
+
+    示例:
+        作为上下文管理器使用:
+        >>> with Profile(device=device) as dt:
+        ...     pass  # 耗时操作
+        >>> print(dt)  # 打印 "Elapsed time is 9.5367431640625e-07 s"
+
+        作为装饰器使用:
+        >>> @Profile()
+        ... def slow_function():
+        ...     time.sleep(0.1)
 
     Examples:
         Use as a context manager to time code execution
@@ -39,113 +92,171 @@ class Profile(contextlib.ContextDecorator):
     """
 
     def __init__(self, t: float = 0.0, device: torch.device | None = None):
-        """Initialize the Profile class.
+        """
+        初始化 Profile 类
+        Initialize the Profile class.
 
         Args:
-            t (float): Initial accumulated time in seconds.
-            device (torch.device, optional): Device used for model inference to enable CUDA synchronization.
+            t (float): 初始累积时间 (秒)
+            device (torch.device, optional): 用于模型推理的设备，以启用 CUDA 同步
         """
-        self.t = t
-        self.device = device
-        self.cuda = bool(device and str(device).startswith("cuda"))
+        self.t = t  # 累积时间
+        self.device = device  # 设备
+        self.cuda = bool(device and str(device).startswith("cuda"))  # 是否为 CUDA 设备
 
     def __enter__(self):
-        """Start timing."""
-        self.start = self.time()
+        """
+        进入上下文管理器时开始计时
+        Start timing.
+        """
+        self.start = self.time()  # 记录开始时间
         return self
 
     def __exit__(self, type, value, traceback):
-        """Stop timing."""
-        self.dt = self.time() - self.start  # delta-time
-        self.t += self.dt  # accumulate dt
+        """
+        退出上下文管理器时停止计时
+        Stop timing.
+        """
+        self.dt = self.time() - self.start  # 计算时间增量 (delta-time)
+        self.t += self.dt  # 累积到总时间
 
     def __str__(self):
-        """Return a human-readable string representing the accumulated elapsed time."""
+        """
+        返回表示累积经过时间的人类可读字符串
+        Return a human-readable string representing the accumulated elapsed time.
+        """
         return f"Elapsed time is {self.t} s"
 
     def time(self):
-        """Get current time with CUDA synchronization if applicable."""
+        """
+        获取当前时间，如适用则进行 CUDA 同步
+        Get current time with CUDA synchronization if applicable.
+
+        Note:
+            CUDA 同步确保 GPU 操作完成后再记录时间，避免异步执行导致的计时不准确
+        """
         if self.cuda:
-            torch.cuda.synchronize(self.device)
-        return time.perf_counter()
+            torch.cuda.synchronize(self.device)  # 等待 CUDA 操作完成
+        return time.perf_counter()  # 返回高精度计时器值
 
 
 def segment2box(segment, width: int = 640, height: int = 640):
-    """Convert segment coordinates to bounding box coordinates.
+    """
+    将分割坐标转换为边界框坐标
+    Convert segment coordinates to bounding box coordinates.
+
+    通过找到最小和最大 x、y 坐标将单个分割标签转换为边界框标签。
+    应用图像内约束，必要时裁剪坐标。
 
     Converts a single segment label to a box label by finding the minimum and maximum x and y coordinates. Applies
     inside-image constraint and clips coordinates when necessary.
 
     Args:
-        segment (torch.Tensor): Segment coordinates in format (N, 2) where N is number of points.
-        width (int): Width of the image in pixels.
-        height (int): Height of the image in pixels.
+        segment (torch.Tensor): 分割坐标，格式为 (N, 2)，其中 N 是点的数量
+        width (int): 图像宽度 (像素)
+        height (int): 图像高度 (像素)
 
     Returns:
-        (np.ndarray): Bounding box coordinates in xyxy format [x1, y1, x2, y2].
+        (np.ndarray): xyxy 格式的边界框坐标 [x1, y1, x2, y2]
+
+    Examples:
+        >>> segment = np.array([[10, 10], [20, 10], [20, 20], [10, 20]])
+        >>> box = segment2box(segment, 640, 640)
+        >>> print(box)  # [10, 10, 20, 20]
     """
-    x, y = segment.T  # segment xy
-    # Clip coordinates if 3 out of 4 sides are outside the image
+    x, y = segment.T  # 转置分割坐标，分离 x 和 y
+    # 如果 4 条边中有 3 条在图像外，则裁剪坐标
     if np.array([x.min() < 0, y.min() < 0, x.max() > width, y.max() > height]).sum() >= 3:
-        x = x.clip(0, width)
-        y = y.clip(0, height)
+        x = x.clip(0, width)  # 裁剪 x 坐标到 [0, width]
+        y = y.clip(0, height)  # 裁剪 y 坐标到 [0, height]
+    # 只保留图像内的点
     inside = (x >= 0) & (y >= 0) & (x <= width) & (y <= height)
     x = x[inside]
     y = y[inside]
+    # 返回边界框 [x_min, y_min, x_max, y_max]，如果没有有效点则返回零数组
     return (
         np.array([x.min(), y.min(), x.max(), y.max()], dtype=segment.dtype)
         if any(x)
         else np.zeros(4, dtype=segment.dtype)
-    )  # xyxy
+    )  # xyxy 格式
 
 
 def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding: bool = True, xywh: bool = False):
-    """Rescale bounding boxes from one image shape to another.
+    """
+    将边界框从一个图像形状重新缩放到另一个图像形状
+    Rescale bounding boxes from one image shape to another.
+
+    将边界框从 img1_shape 重新缩放到 img0_shape，考虑填充和纵横比变化。
+    支持 xyxy 和 xywh 两种边界框格式。
 
     Rescales bounding boxes from img1_shape to img0_shape, accounting for padding and aspect ratio changes. Supports
     both xyxy and xywh box formats.
 
     Args:
-        img1_shape (tuple): Shape of the source image (height, width).
-        boxes (torch.Tensor): Bounding boxes to rescale in format (N, 4).
-        img0_shape (tuple): Shape of the target image (height, width).
-        ratio_pad (tuple, optional): Tuple of (ratio, pad) for scaling. If None, calculated from image shapes.
-        padding (bool): Whether boxes are based on YOLO-style augmented images with padding.
-        xywh (bool): Whether box format is xywh (True) or xyxy (False).
+        img1_shape (tuple): 源图像形状 (高度, 宽度)
+        boxes (torch.Tensor): 要重新缩放的边界框，格式为 (N, 4)
+        img0_shape (tuple): 目标图像形状 (高度, 宽度)
+        ratio_pad (tuple, optional): 缩放的 (比例, 填充) 元组。如果为 None，则从图像形状计算
+        padding (bool): 边界框是否基于带填充的 YOLO 风格增强图像
+        xywh (bool): 边界框格式是 xywh (True) 还是 xyxy (False)
 
     Returns:
-        (torch.Tensor): Rescaled bounding boxes in the same format as input.
+        (torch.Tensor): 重新缩放后的边界框，格式与输入相同
+
+    Examples:
+        >>> boxes = torch.tensor([[50, 50, 100, 100]])
+        >>> img1_shape = (640, 640)
+        >>> img0_shape = (480, 640)
+        >>> scaled_boxes = scale_boxes(img1_shape, boxes, img0_shape)
     """
-    if ratio_pad is None:  # calculate from img0_shape
-        gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
+    if ratio_pad is None:  # 从 img0_shape 计算
+        # 计算缩放增益 (保持纵横比)
+        gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain = old / new
+        # 计算填充 (居中图像)
         pad_x = round((img1_shape[1] - img0_shape[1] * gain) / 2 - 0.1)
         pad_y = round((img1_shape[0] - img0_shape[0] * gain) / 2 - 0.1)
     else:
-        gain = ratio_pad[0][0]
-        pad_x, pad_y = ratio_pad[1]
+        gain = ratio_pad[0][0]  # 使用提供的增益
+        pad_x, pad_y = ratio_pad[1]  # 使用提供的填充
 
     if padding:
-        boxes[..., 0] -= pad_x  # x padding
-        boxes[..., 1] -= pad_y  # y padding
+        # 移除填充
+        boxes[..., 0] -= pad_x  # x 填充
+        boxes[..., 1] -= pad_y  # y 填充
         if not xywh:
-            boxes[..., 2] -= pad_x  # x padding
-            boxes[..., 3] -= pad_y  # y padding
+            boxes[..., 2] -= pad_x  # x 填充 (仅对 xyxy 格式)
+            boxes[..., 3] -= pad_y  # y 填充 (仅对 xyxy 格式)
+    # 除以增益进行缩放
     boxes[..., :4] /= gain
+    # 如果是 xyxy 格式，则裁剪到图像边界
     return boxes if xywh else clip_boxes(boxes, img0_shape)
 
 
 def make_divisible(x: int, divisor):
-    """Return the nearest number that is divisible by the given divisor.
+    """
+    返回能被给定除数整除的最接近的数
+    Return the nearest number that is divisible by the given divisor.
 
     Args:
-        x (int): The number to make divisible.
-        divisor (int | torch.Tensor): The divisor.
+        x (int): 要使其可整除的数
+        divisor (int | torch.Tensor): 除数
 
     Returns:
-        (int): The nearest number divisible by the divisor.
+        (int): 能被除数整除的最接近的数
+
+    Examples:
+        >>> make_divisible(37, 8)
+        40
+        >>> make_divisible(42, 8)
+        48
+
+    Note:
+        此函数通常用于确保网络层的通道数是某个值的倍数，
+        以便更好地利用硬件加速 (如 Tensor Cores 通常要求 8 的倍数)
     """
     if isinstance(divisor, torch.Tensor):
-        divisor = int(divisor.max())  # to int
+        divisor = int(divisor.max())  # 转换为整数
+    # 向上取整到最接近的除数倍数
     return math.ceil(x / divisor) * divisor
 
 

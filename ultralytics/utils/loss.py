@@ -1,50 +1,90 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+损失函数模块 | Loss Functions Module
 
-from __future__ import annotations
+本模块包含YOLO系列模型训练过程中使用的各种损失函数，包括：
+- Varifocal Loss: 用于解决类别不平衡问题的变焦损失
+- Focal Loss: 聚焦损失，专注于难分类样本
+- Distribution Focal Loss (DFL): 分布聚焦损失，用于边界框回归
+- Bounding Box Loss: 边界框损失，包括IoU和DFL损失
+- Keypoint Loss: 关键点检测损失
+- 各种任务特定的损失类（检测、分割、姿态估计、OBB、端到端检测等）
 
-from typing import Any
+This module contains various loss functions used in YOLO model training.
+"""
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from __future__ import annotations  # 支持类型注解中的延迟求值 | Enable postponed evaluation of annotations
 
-from ultralytics.utils.metrics import OKS_SIGMA
-from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
-from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
-from ultralytics.utils.torch_utils import autocast
+from typing import Any  # 通用类型提示 | Generic type hint
 
-from .metrics import bbox_iou, probiou
-from .tal import bbox2dist
+import torch  # PyTorch深度学习框架 | PyTorch deep learning framework
+import torch.nn as nn  # 神经网络模块 | Neural network module
+import torch.nn.functional as F  # 神经网络函数式接口 | Neural network functional interface
+
+from ultralytics.utils.metrics import OKS_SIGMA  # OKS(Object Keypoint Similarity)标准差 | OKS sigma values
+from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh  # 边界框和掩码操作函数 | Bounding box and mask operations
+from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors  # 任务对齐分配器和锚点生成 | Task aligned assigners and anchor generation
+from ultralytics.utils.torch_utils import autocast  # 自动混合精度工具 | Automatic mixed precision utility
+
+from .metrics import bbox_iou, probiou  # IoU计算函数 | IoU computation functions
+from .tal import bbox2dist  # 边界框到距离的转换 | Bounding box to distance conversion
 
 
 class VarifocalLoss(nn.Module):
-    """Varifocal loss by Zhang et al.
+    """
+    变焦损失 | Varifocal Loss
+
+    Varifocal loss by Zhang et al.
+
+    实现Varifocal Loss函数，通过聚焦难分类样本和平衡正负样本来解决目标检测中的类别不平衡问题。
+    该损失函数为不同质量的样本分配不同的权重，高质量的正样本获得更大的权重。
 
     Implements the Varifocal Loss function for addressing class imbalance in object detection by focusing on
     hard-to-classify examples and balancing positive/negative samples.
 
     Attributes:
-        gamma (float): The focusing parameter that controls how much the loss focuses on hard-to-classify examples.
-        alpha (float): The balancing factor used to address class imbalance.
+        gamma (float): 聚焦参数，控制损失对难分类样本的关注程度 | Focusing parameter for hard examples
+        alpha (float): 平衡因子，用于处理类别不平衡 | Balancing factor for class imbalance
 
     References:
         https://arxiv.org/abs/2008.13367
     """
 
     def __init__(self, gamma: float = 2.0, alpha: float = 0.75):
-        """Initialize the VarifocalLoss class with focusing and balancing parameters."""
+        """
+        初始化VarifocalLoss类
+
+        Initialize the VarifocalLoss class with focusing and balancing parameters.
+
+        Args:
+            gamma: 聚焦参数，默认2.0 | Focusing parameter, default 2.0
+            alpha: 平衡因子，默认0.75 | Balancing factor, default 0.75
+        """
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
 
     def forward(self, pred_score: torch.Tensor, gt_score: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
-        """Compute varifocal loss between predictions and ground truth."""
+        """
+        计算预测和真实标签之间的varifocal损失
+
+        Compute varifocal loss between predictions and ground truth.
+
+        Args:
+            pred_score: 预测分数(logits) | Predicted scores (logits)
+            gt_score: 真实分数(目标质量) | Ground truth scores (target quality)
+            label: 二值标签(0或1) | Binary labels (0 or 1)
+
+        Returns:
+            计算得到的varifocal损失值 | Computed varifocal loss value
+        """
+        # 计算权重：负样本使用focal权重，正样本使用目标质量作为权重
+        # Compute weights: negative samples use focal weights, positive samples use target quality
         weight = self.alpha * pred_score.sigmoid().pow(self.gamma) * (1 - label) + gt_score * label
-        with autocast(enabled=False):
+        with autocast(enabled=False):  # 禁用自动混合精度以提高数值稳定性 | Disable AMP for numerical stability
             loss = (
                 (F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none") * weight)
-                .mean(1)
-                .sum()
+                .mean(1)  # 在类别维度上取平均 | Average over class dimension
+                .sum()    # 在批次维度上求和 | Sum over batch dimension
             )
         return loss
 

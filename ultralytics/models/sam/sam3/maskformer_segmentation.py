@@ -1,54 +1,130 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# Ultralytics 许可证 - 详见 https://ultralytics.com/license
 
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+# 版权所有 (c) Meta Platforms, Inc. 及其关联公司。保留所有权利。
 
-from __future__ import annotations
+"""
+MaskFormer 分割模块 (MaskFormer Segmentation Module)
 
-import math
+本模块实现了基于 MaskFormer 架构的分割头部组件，用于从骨干网络特征和对象查询中预测分割掩码。
+主要包含以下组件：
+- LinearPresenceHead: 线性存在性头部，用于预测图像中类别的存在性
+- MaskPredictor: 掩码预测器，从对象查询和像素嵌入中预测掩码
+- SegmentationHead: 分割头部，整合像素解码器和掩码预测器
+- PixelDecoder: 像素解码器，对骨干网络特征进行上采样
+- UniversalSegmentationHead: 通用分割头部，同时处理语义分割和实例分割
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.utils.checkpoint as checkpoint
+This module implements MaskFormer-based segmentation head components for predicting segmentation masks
+from backbone features and object queries.
+"""
 
-from ultralytics.nn.modules.transformer import MLP
+from __future__ import annotations  # 允许使用延迟注解，支持类型提示中的前向引用
+
+import math  # 数学函数库，用于数学运算
+
+import torch  # PyTorch 深度学习框架
+import torch.nn as nn  # PyTorch 神经网络模块
+import torch.nn.functional as F  # PyTorch 函数式接口，提供各种激活函数、损失函数等
+import torch.utils.checkpoint as checkpoint  # PyTorch 检查点工具，用于梯度检查点以节省内存
+
+from ultralytics.nn.modules.transformer import MLP  # 导入多层感知机（MLP）模块
 
 
 class LinearPresenceHead(nn.Sequential):
-    """Linear presence head for predicting the presence of classes in an image."""
+    """
+    线性存在性头部 (Linear Presence Head)
+
+    用于预测图像中类别的存在性的线性头部。该模块继承自 nn.Sequential，使用线性层将特征映射到存在性分数。
+
+    Linear presence head for predicting the presence of classes in an image.
+    """
 
     def __init__(self, d_model):
-        """Initializes the LinearPresenceHead."""
+        """
+        初始化线性存在性头部 (Initialize LinearPresenceHead)
+
+        Args:
+            d_model (int): 输入特征的维度 / Input feature dimension
+
+        Note:
+            使用两个恒等映射层和一个线性层的组合，这是一个兼容旧检查点的技巧
+            Uses two identity layers and one linear layer, a hack for old checkpoint compatibility
+        """
+        # 一个技巧性的实现，使用两个恒等层+线性层来兼容旧的检查点格式
         # a hack to make `LinearPresenceHead` compatible with old checkpoints
         super().__init__(nn.Identity(), nn.Identity(), nn.Linear(d_model, 1))
 
     def forward(self, hs, prompt, prompt_mask):
-        """Forward pass of the presence head."""
+        """
+        前向传播 (Forward Pass)
+
+        Args:
+            hs (torch.Tensor): 隐藏状态特征 / Hidden state features
+            prompt (torch.Tensor): 提示信息（未使用但保留接口兼容性）/ Prompt (unused but kept for interface compatibility)
+            prompt_mask (torch.Tensor): 提示掩码（未使用但保留接口兼容性）/ Prompt mask (unused but kept for interface compatibility)
+
+        Returns:
+            torch.Tensor: 存在性预测分数 / Presence prediction scores
+        """
         return super().forward(hs)
 
 
 class MaskPredictor(nn.Module):
-    """Predicts masks from object queries and pixel embeddings."""
+    """
+    掩码预测器 (Mask Predictor)
+
+    从对象查询和像素嵌入中预测分割掩码。通过 MLP 网络将对象查询转换为掩码嵌入，
+    然后使用爱因斯坦求和约定将其与像素嵌入相乘得到最终的掩码预测。
+
+    Predicts masks from object queries and pixel embeddings.
+    """
 
     def __init__(self, hidden_dim, mask_dim):
-        """Initializes the MaskPredictor."""
+        """
+        初始化掩码预测器 (Initialize MaskPredictor)
+
+        Args:
+            hidden_dim (int): 隐藏层维度，对象查询的特征维度 / Hidden dimension, feature dim of object queries
+            mask_dim (int): 掩码维度，输出掩码嵌入的维度 / Mask dimension, output mask embedding dimension
+        """
         super().__init__()
+        # 使用 3 层 MLP 将对象查询映射到掩码嵌入空间
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
 
     def forward(self, obj_queries, pixel_embed):
-        """Predicts masks from object queries and pixel embeddings."""
-        if len(obj_queries.shape) == 3:
+        """
+        前向传播，从对象查询和像素嵌入预测掩码 (Forward pass to predict masks)
+
+        Args:
+            obj_queries (torch.Tensor): 对象查询张量，形状可以是 [B, Q, C] 或 [L, B, Q, C]
+                                       Object queries, shape [B, Q, C] or [L, B, Q, C]
+                                       其中 B=batch, Q=queries, C=channels, L=layers
+            pixel_embed (torch.Tensor): 像素嵌入张量，形状可以是 [C, H, W] 或 [B, C, H, W]
+                                       Pixel embeddings, shape [C, H, W] or [B, C, H, W]
+
+        Returns:
+            torch.Tensor: 预测的掩码张量 / Predicted masks
+                         形状为 [B, Q, H, W] 或 [L, B, Q, H, W]
+                         Shape [B, Q, H, W] or [L, B, Q, H, W]
+        """
+        if len(obj_queries.shape) == 3:  # 对象查询形状为 [B, Q, C]
             if pixel_embed.ndim == 3:
+                # 批量大小被省略的情况（单批次）
                 # batch size was omitted
                 mask_preds = torch.einsum("bqc,chw->bqhw", self.mask_embed(obj_queries), pixel_embed)
             else:
+                # 标准情况：对象查询 [B, Q, C] 与像素嵌入 [B, C, H, W] 相乘
                 mask_preds = torch.einsum("bqc,bchw->bqhw", self.mask_embed(obj_queries), pixel_embed)
         else:
+            # 假定包含辅助掩码，对象查询形状为 [L, B, Q, C]（多层输出）
             # Assumed to have aux masks
             if pixel_embed.ndim == 3:
+                # 批量大小被省略的情况
                 # batch size was omitted
                 mask_preds = torch.einsum("lbqc,chw->lbqhw", self.mask_embed(obj_queries), pixel_embed)
             else:
+                # 多层对象查询 [L, B, Q, C] 与像素嵌入 [B, C, H, W] 相乘
                 mask_preds = torch.einsum("lbqc,bchw->lbqhw", self.mask_embed(obj_queries), pixel_embed)
 
         return mask_preds

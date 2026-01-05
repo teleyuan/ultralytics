@@ -1,5 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 from __future__ import annotations
 
 from copy import deepcopy
@@ -21,55 +19,53 @@ from ultralytics.utils.torch_utils import select_device, smart_inference_mode
 
 
 class YOLOEDetectValidator(DetectionValidator):
-    """A validator class for YOLOE detection models that handles both text and visual prompt embeddings.
+    """处理文本和视觉提示嵌入的 YOLOE 检测模型验证器类
 
-    This class extends DetectionValidator to provide specialized validation functionality for YOLOE models. It supports
-    validation using either text prompts or visual prompt embeddings extracted from training samples, enabling flexible
-    evaluation strategies for prompt-based object detection.
+    该类扩展了 DetectionValidator,为 YOLOE 模型提供专门的验证功能。它支持使用文本提示或从训练样本中提取的
+    视觉提示嵌入进行验证,为基于提示的目标检测提供灵活的评估策略。
 
-    Attributes:
-        device (torch.device): The device on which validation is performed.
-        args (namespace): Configuration arguments for validation.
-        dataloader (DataLoader): DataLoader for validation data.
+    属性:
+        device (torch.device): 执行验证的设备
+        args (namespace): 验证的配置参数
+        dataloader (DataLoader): 验证数据的 DataLoader
 
-    Methods:
-        get_visual_pe: Extract visual prompt embeddings from training samples.
-        preprocess: Preprocess batch data ensuring visuals are on the same device as images.
-        get_vpe_dataloader: Create a dataloader for LVIS training visual prompt samples.
-        __call__: Run validation using either text or visual prompt embeddings.
+    方法:
+        get_visual_pe: 从训练样本中提取视觉提示嵌入
+        preprocess: 预处理批次数据,确保视觉数据与图像在同一设备上
+        get_vpe_dataloader: 为 LVIS 训练视觉提示样本创建数据加载器
+        __call__: 使用文本或视觉提示嵌入运行验证
 
-    Examples:
-        Validate with text prompts
+    示例:
+        使用文本提示验证
         >>> validator = YOLOEDetectValidator()
         >>> stats = validator(model=model, load_vp=False)
 
-        Validate with visual prompts
+        使用视觉提示验证
         >>> stats = validator(model=model, refer_data="path/to/data.yaml", load_vp=True)
     """
 
     @smart_inference_mode()
     def get_visual_pe(self, dataloader: torch.utils.data.DataLoader, model: YOLOEModel) -> torch.Tensor:
-        """Extract visual prompt embeddings from training samples.
+        """从训练样本中提取视觉提示嵌入
 
-        This method processes a dataloader to compute visual prompt embeddings for each class using a YOLOE model. It
-        normalizes the embeddings and handles cases where no samples exist for a class by setting their embeddings to
-        zero.
+        该方法处理数据加载器,使用 YOLOE 模型计算每个类别的视觉提示嵌入。它对嵌入进行归一化,
+        并通过将其设置为零来处理不存在样本的类别。
 
-        Args:
-            dataloader (torch.utils.data.DataLoader): The dataloader providing training samples.
-            model (YOLOEModel): The YOLOE model from which to extract visual prompt embeddings.
+        参数:
+            dataloader (torch.utils.data.DataLoader): 提供训练样本的数据加载器
+            model (YOLOEModel): 从中提取视觉提示嵌入的 YOLOE 模型
 
-        Returns:
-            (torch.Tensor): Visual prompt embeddings with shape (1, num_classes, embed_dim).
+        返回:
+            (torch.Tensor): 形状为 (1, num_classes, embed_dim) 的视觉提示嵌入
         """
         assert isinstance(model, YOLOEModel)
         names = [name.split("/", 1)[0] for name in list(dataloader.dataset.data["names"].values())]
         visual_pe = torch.zeros(len(names), model.model[-1].embed, device=self.device)
         cls_visual_num = torch.zeros(len(names))
 
-        desc = "Get visual prompt embeddings from samples"
+        desc = "从样本中获取视觉提示嵌入"
 
-        # Count samples per class
+        # 统计每个类别的样本数量
         for batch in dataloader:
             cls = batch["cls"].squeeze(-1).to(torch.int).unique()
             count = torch.bincount(cls, minlength=len(names))
@@ -77,7 +73,7 @@ class YOLOEDetectValidator(DetectionValidator):
 
         cls_visual_num = cls_visual_num.to(self.device)
 
-        # Extract visual prompt embeddings
+        # 提取视觉提示嵌入
         pbar = TQDM(dataloader, total=len(dataloader), desc=desc)
         for batch in pbar:
             batch = self.preprocess(batch)
@@ -91,22 +87,22 @@ class YOLOEDetectValidator(DetectionValidator):
                 for c in cls:
                     visual_pe[c] += preds[i][pad_cls == c].sum(0) / cls_visual_num[c]
 
-        # Normalize embeddings for classes with samples, set others to zero
+        # 对有样本的类别归一化嵌入,其他设置为零
         visual_pe[cls_visual_num != 0] = F.normalize(visual_pe[cls_visual_num != 0], dim=-1, p=2)
         visual_pe[cls_visual_num == 0] = 0
         return visual_pe.unsqueeze(0)
 
     def get_vpe_dataloader(self, data: dict[str, Any]) -> torch.utils.data.DataLoader:
-        """Create a dataloader for LVIS training visual prompt samples.
+        """为 LVIS 训练视觉提示样本创建数据加载器
 
-        This method prepares a dataloader for visual prompt embeddings (VPE) using the specified dataset. It applies
-        necessary transformations including LoadVisualPrompt and configurations to the dataset for validation purposes.
+        该方法使用指定的数据集准备用于视觉提示嵌入 (VPE) 的数据加载器。它将必要的变换(包括 LoadVisualPrompt)
+        和配置应用于数据集以用于验证目的。
 
-        Args:
-            data (dict): Dataset configuration dictionary containing paths and settings.
+        参数:
+            data (dict): 包含路径和设置的数据集配置字典
 
-        Returns:
-            (torch.utils.data.DataLoader): The dataloader for visual prompt samples.
+        返回:
+            (torch.utils.data.DataLoader): 视觉提示样本的数据加载器
         """
         dataset = build_yolo_dataset(
             self.args,
@@ -137,20 +133,19 @@ class YOLOEDetectValidator(DetectionValidator):
         refer_data: str | None = None,
         load_vp: bool = False,
     ) -> dict[str, Any]:
-        """Run validation on the model using either text or visual prompt embeddings.
+        """使用文本或视觉提示嵌入在模型上运行验证
 
-        This method validates the model using either text prompts or visual prompts, depending on the load_vp flag. It
-        supports validation during training (using a trainer object) or standalone validation with a provided model. For
-        visual prompts, reference data can be specified to extract embeddings from a different dataset.
+        该方法根据 load_vp 标志使用文本提示或视觉提示验证模型。它支持训练期间的验证(使用训练器对象)
+        或使用提供的模型进行独立验证。对于视觉提示,可以指定参考数据以从不同数据集提取嵌入。
 
-        Args:
-            trainer (object, optional): Trainer object containing the model and device.
-            model (YOLOEModel | str, optional): Model to validate. Required if trainer is not provided.
-            refer_data (str, optional): Path to reference data for visual prompts.
-            load_vp (bool): Whether to load visual prompts. If False, text prompts are used.
+        参数:
+            trainer (object, optional): 包含模型和设备的训练器对象
+            model (YOLOEModel | str, optional): 要验证的模型。如果未提供训练器则必需
+            refer_data (str, optional): 视觉提示的参考数据路径
+            load_vp (bool): 是否加载视觉提示。如果为 False,则使用文本提示
 
-        Returns:
-            (dict): Validation statistics containing metrics computed during validation.
+        返回:
+            (dict): 包含验证期间计算的指标的验证统计信息
         """
         if trainer is not None:
             self.device = trainer.device
@@ -158,19 +153,19 @@ class YOLOEDetectValidator(DetectionValidator):
             names = [name.split("/", 1)[0] for name in list(self.dataloader.dataset.data["names"].values())]
 
             if load_vp:
-                LOGGER.info("Validate using the visual prompt.")
+                LOGGER.info("使用视觉提示进行验证。")
                 self.args.half = False
-                # Directly use the same dataloader for visual embeddings extracted during training
+                # 直接使用相同的数据加载器提取训练期间的视觉嵌入
                 vpe = self.get_visual_pe(self.dataloader, model)
                 model.set_classes(names, vpe)
             else:
-                LOGGER.info("Validate using the text prompt.")
+                LOGGER.info("使用文本提示进行验证。")
                 tpe = model.get_text_pe(names)
                 model.set_classes(names, tpe)
             stats = super().__call__(trainer, model)
         else:
             if refer_data is not None:
-                assert load_vp, "Refer data is only used for visual prompt validation."
+                assert load_vp, "参考数据仅用于视觉提示验证。"
             self.device = select_device(self.args.device, verbose=False)
 
             if isinstance(model, (str, Path)):
@@ -182,18 +177,18 @@ class YOLOEDetectValidator(DetectionValidator):
             names = [name.split("/", 1)[0] for name in list(data["names"].values())]
 
             if load_vp:
-                LOGGER.info("Validate using the visual prompt.")
+                LOGGER.info("使用视觉提示进行验证。")
                 self.args.half = False
-                # TODO: need to check if the names from refer data is consistent with the evaluated dataset
-                # could use same dataset or refer to extract visual prompt embeddings
+                # TODO: 需要检查参考数据中的类别名称是否与评估数据集一致
+                # 可以使用相同的数据集或参考来提取视觉提示嵌入
                 dataloader = self.get_vpe_dataloader(data)
                 vpe = self.get_visual_pe(dataloader, model)
                 model.set_classes(names, vpe)
                 stats = super().__call__(model=deepcopy(model))
-            elif isinstance(model.model[-1], YOLOEDetect) and hasattr(model.model[-1], "lrpc"):  # prompt-free
+            elif isinstance(model.model[-1], YOLOEDetect) and hasattr(model.model[-1], "lrpc"):  # 无提示
                 return super().__call__(trainer, model)
             else:
-                LOGGER.info("Validate using the text prompt.")
+                LOGGER.info("使用文本提示进行验证。")
                 tpe = model.get_text_pe(names)
                 model.set_classes(names, tpe)
                 stats = super().__call__(model=deepcopy(model))
@@ -201,6 +196,6 @@ class YOLOEDetectValidator(DetectionValidator):
 
 
 class YOLOESegValidator(YOLOEDetectValidator, SegmentationValidator):
-    """YOLOE segmentation validator that supports both text and visual prompt embeddings."""
+    """支持文本和视觉提示嵌入的 YOLOE 分割验证器"""
 
     pass

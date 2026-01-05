@@ -1,8 +1,13 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 """
-Export a YOLO PyTorch model to other formats. TensorFlow exports authored by https://github.com/zldrobit.
+模型导出模块
 
-Format                  | `format=argument`         | Model
+该模块提供将 YOLO PyTorch 模型导出为各种推理格式的功能。
+支持超过 15 种不同的导出格式，用于不同的部署场景和硬件平台。
+
+TensorFlow 导出功能由 https://github.com/zldrobit 贡献。
+
+支持的导出格式:
+格式                     | format 参数               | 导出后的模型文件
 ---                     | ---                       | ---
 PyTorch                 | -                         | yolo11n.pt
 TorchScript             | `torchscript`             | yolo11n.torchscript
@@ -23,18 +28,18 @@ RKNN                    | `rknn`                    | yolo11n_rknn_model/
 ExecuTorch              | `executorch`              | yolo11n_executorch_model/
 Axelera                 | `axelera`                 | yolo11n_axelera_model/
 
-Requirements:
+安装要求:
     $ pip install "ultralytics[export]"
 
-Python:
+Python 使用示例:
     from ultralytics import YOLO
     model = YOLO('yolo11n.pt')
     results = model.export(format='onnx')
 
-CLI:
+命令行使用示例:
     $ yolo mode=export model=yolo11n.pt format=onnx
 
-Inference:
+推理示例:
     $ yolo predict model=yolo11n.pt                 # PyTorch
                          yolo11n.torchscript        # TorchScript
                          yolo11n.onnx               # ONNX Runtime or OpenCV DNN with dnn=True
@@ -53,51 +58,54 @@ Inference:
                          yolo11n_executorch_model   # ExecuTorch
                          yolo11n_axelera_model      # Axelera
 
-TensorFlow.js:
+TensorFlow.js 部署:
     $ cd .. && git clone https://github.com/zldrobit/tfjs-yolov5-example.git && cd tfjs-yolov5-example
     $ npm install
     $ ln -s ../../yolo11n_web_model public/yolo11n_web_model
     $ npm start
 """
 
-import json
-import os
-import re
-import shutil
-import subprocess
-import time
-from copy import deepcopy
-from datetime import datetime
-from pathlib import Path
+# 标准库导入
+import json  # JSON 数据处理
+import os  # 操作系统接口
+import re  # 正则表达式
+import shutil  # 文件操作工具
+import subprocess  # 子进程管理
+import time  # 时间相关函数
+from copy import deepcopy  # 深拷贝对象
+from datetime import datetime  # 日期时间处理
+from pathlib import Path  # 跨平台路径操作
 
-import numpy as np
-import torch
+# 第三方库导入
+import numpy as np  # 数组和数值计算
+import torch  # PyTorch 深度学习框架
 
-from ultralytics import __version__
-from ultralytics.cfg import TASK2DATA, get_cfg
-from ultralytics.data import build_dataloader
-from ultralytics.data.dataset import YOLODataset
-from ultralytics.data.utils import check_cls_dataset, check_det_dataset
-from ultralytics.nn.autobackend import check_class_names, default_class_names
-from ultralytics.nn.modules import C2f, Classify, Detect, RTDETRDecoder
-from ultralytics.nn.tasks import ClassificationModel, DetectionModel, SegmentationModel, WorldModel
-from ultralytics.utils import (
-    ARM64,
-    DEFAULT_CFG,
-    IS_COLAB,
-    IS_DEBIAN_BOOKWORM,
-    IS_DEBIAN_TRIXIE,
-    IS_DOCKER,
-    IS_JETSON,
-    IS_RASPBERRYPI,
-    IS_UBUNTU,
-    LINUX,
-    LOGGER,
-    MACOS,
-    MACOS_VERSION,
-    RKNN_CHIPS,
-    SETTINGS,
-    TORCH_VERSION,
+# Ultralytics 模块导入
+from ultralytics import __version__  # 版本号
+from ultralytics.cfg import TASK2DATA, get_cfg  # 配置管理
+from ultralytics.data import build_dataloader  # 数据加载器构建
+from ultralytics.data.dataset import YOLODataset  # YOLO 数据集
+from ultralytics.data.utils import check_cls_dataset, check_det_dataset  # 数据集检查
+from ultralytics.nn.autobackend import check_class_names, default_class_names  # 类名处理
+from ultralytics.nn.modules import C2f, Classify, Detect, RTDETRDecoder  # 神经网络模块
+from ultralytics.nn.tasks import ClassificationModel, DetectionModel, SegmentationModel, WorldModel  # 任务模型
+from ultralytics.utils import (  # 工具函数和常量
+    ARM64,  # ARM64 架构标志
+    DEFAULT_CFG,  # 默认配置
+    IS_COLAB,  # 是否在 Colab 环境
+    IS_DEBIAN_BOOKWORM,  # Debian Bookworm 系统
+    IS_DEBIAN_TRIXIE,  # Debian Trixie 系统
+    IS_DOCKER,  # 是否在 Docker 容器
+    IS_JETSON,  # NVIDIA Jetson 平台
+    IS_RASPBERRYPI,  # 树莓派平台
+    IS_UBUNTU,  # Ubuntu 系统
+    LINUX,  # Linux 系统
+    LOGGER,  # 日志记录器
+    MACOS,  # macOS 系统
+    MACOS_VERSION,  # macOS 版本
+    RKNN_CHIPS,  # 瑞芯微 RKNN 芯片列表
+    SETTINGS,  # 全局设置
+    TORCH_VERSION,  # PyTorch 版本
     WINDOWS,
     YAML,
     callbacks,

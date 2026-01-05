@@ -1,73 +1,119 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+Ultralytics 工具模块初始化文件
 
-from __future__ import annotations
+这是 Ultralytics YOLO 库的核心工具模块，提供了大量通用的辅助函数、类和常量。
+该模块包含了项目中广泛使用的工具函数，涵盖文件操作、系统检测、日志管理、配置处理等多个方面。
 
-import contextlib
-import importlib.metadata
-import inspect
-import json
-import logging
-import os
-import platform
-import re
-import socket
-import sys
-import threading
-import time
-import warnings
-from functools import lru_cache
-from pathlib import Path
-from threading import Lock
-from types import SimpleNamespace
-from urllib.parse import unquote
+主要功能:
+    - 系统环境检测 (操作系统、设备类型、运行环境等)
+    - 日志和输出管理 (彩色输出、日志记录器配置等)
+    - 配置文件处理 (YAML 加载保存、设置管理等)
+    - 多线程和异常处理 (线程锁、重试机制、异常捕获等)
+    - 平台相关常量 (路径、版本、设备信息等)
+    - 数据导出工具 (CSV、JSON、DataFrame 等)
 
-import cv2
-import numpy as np
-import torch
+常量定义:
+    - RANK/LOCAL_RANK: 分布式训练进程标识
+    - ROOT/ASSETS: 项目根目录和资源路径
+    - MACOS/LINUX/WINDOWS: 操作系统标识
+    - IS_COLAB/IS_KAGGLE/IS_DOCKER: 运行环境标识
+    - SETTINGS: 全局设置管理器
 
-from ultralytics import __version__
-from ultralytics.utils.git import GitRepo
-from ultralytics.utils.patches import imread, imshow, imwrite, torch_save  # for patches
-from ultralytics.utils.tqdm import TQDM  # noqa
+核心类:
+    - YAML: YAML 文件操作工具类
+    - SettingsManager: 设置管理类
+    - SimpleClass: 简单基类，提供友好的字符串表示
+    - IterableSimpleNamespace: 可迭代的命名空间类
+    - ThreadingLocked: 线程安全装饰器
+    - TryExcept/Retry: 异常处理和重试装饰器
+"""
 
-# PyTorch Multi-GPU DDP Constants
-RANK = int(os.getenv("RANK", -1))
-LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable/elastic/run.html
+from __future__ import annotations  # 支持 Python 3.7+ 的类型注解语法
 
-# Other Constants
-ARGV = sys.argv or ["", ""]  # sometimes sys.argv = []
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[1]  # YOLO
-ASSETS = ROOT / "assets"  # default images
-ASSETS_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0"  # assets GitHub URL
-DEFAULT_CFG_PATH = ROOT / "cfg/default.yaml"
-NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLO multiprocessing threads
-AUTOINSTALL = str(os.getenv("YOLO_AUTOINSTALL", True)).lower() == "true"  # global auto-install mode
-VERBOSE = str(os.getenv("YOLO_VERBOSE", True)).lower() == "true"  # global verbose mode
-LOGGING_NAME = "ultralytics"
-MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])  # environment booleans
-MACOS_VERSION = platform.mac_ver()[0] if MACOS else None
-NOT_MACOS14 = not (MACOS and MACOS_VERSION.startswith("14."))
-ARM64 = platform.machine() in {"arm64", "aarch64"}  # ARM64 booleans
-PYTHON_VERSION = platform.python_version()
-TORCH_VERSION = str(torch.__version__)  # Normalize torch.__version__ (PyTorch>1.9 returns TorchVersion objects)
-TORCHVISION_VERSION = importlib.metadata.version("torchvision")  # faster than importing torchvision
-IS_VSCODE = os.environ.get("TERM_PROGRAM", False) == "vscode"
+# 标准库导入
+import contextlib  # 上下文管理器工具
+import importlib.metadata  # 包元数据访问
+import inspect  # 代码检查和内省
+import json  # JSON 编码解码
+import logging  # 日志记录
+import os  # 操作系统接口
+import platform  # 平台信息
+import re  # 正则表达式
+import socket  # 网络接口
+import sys  # 系统相关参数和函数
+import threading  # 线程操作
+import time  # 时间相关函数
+import warnings  # 警告控制
+from functools import lru_cache  # LRU 缓存装饰器
+from pathlib import Path  # 面向对象的文件系统路径
+from threading import Lock  # 线程锁
+from types import SimpleNamespace  # 简单的命名空间对象
+from urllib.parse import unquote  # URL 解码
+
+# 第三方库导入
+import cv2  # OpenCV 计算机视觉库
+import numpy as np  # NumPy 数值计算库
+import torch  # PyTorch 深度学习框架
+
+# Ultralytics 内部导入
+from ultralytics import __version__  # YOLO 版本号
+from ultralytics.utils.git import GitRepo  # Git 仓库操作类
+from ultralytics.utils.patches import imread, imshow, imwrite, torch_save  # 修补函数 (解决路径编码问题)
+from ultralytics.utils.tqdm import TQDM  # 进度条工具 (增强版)  # noqa
+
+# ===================================================================================================
+# 常量定义区域
+# ===================================================================================================
+
+# PyTorch 多 GPU 分布式数据并行 (DDP) 常量
+RANK = int(os.getenv("RANK", -1))  # 当前进程在所有进程中的全局排名，-1 表示非分布式训练
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # 当前进程在本机所有进程中的排名 (单机多卡时使用)
+# 参考: https://pytorch.org/docs/stable/elastic/run.html
+
+# 路径和文件相关常量
+ARGV = sys.argv or ["", ""]  # 命令行参数列表 (有时 sys.argv 可能为空列表，需要默认值)
+FILE = Path(__file__).resolve()  # 当前文件的绝对路径
+ROOT = FILE.parents[1]  # Ultralytics 项目根目录 (向上两级目录)
+ASSETS = ROOT / "assets"  # 默认图片和资源文件目录
+ASSETS_URL = "https://github.com/ultralytics/assets/releases/download/v0.0.0"  # 资源文件的 GitHub 下载地址
+DEFAULT_CFG_PATH = ROOT / "cfg/default.yaml"  # 默认配置文件路径
+
+# 性能和行为相关常量
+NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # YOLO 多进程处理的线程数 (最少1个，最多8个)
+AUTOINSTALL = str(os.getenv("YOLO_AUTOINSTALL", True)).lower() == "true"  # 是否自动安装缺失的依赖包
+VERBOSE = str(os.getenv("YOLO_VERBOSE", True)).lower() == "true"  # 是否启用详细输出模式
+LOGGING_NAME = "ultralytics"  # 日志记录器名称
+
+# 操作系统和平台检测
+MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])  # 操作系统布尔标志
+MACOS_VERSION = platform.mac_ver()[0] if MACOS else None  # macOS 版本号 (仅在 macOS 上有效)
+NOT_MACOS14 = not (MACOS and MACOS_VERSION.startswith("14."))  # 是否不是 macOS 14 (用于兼容性检查)
+ARM64 = platform.machine() in {"arm64", "aarch64"}  # 是否为 ARM64 架构 (如 Apple Silicon, Raspberry Pi)
+
+# 软件版本信息
+PYTHON_VERSION = platform.python_version()  # Python 版本字符串
+TORCH_VERSION = str(torch.__version__)  # PyTorch 版本 (标准化为字符串，因为 PyTorch>1.9 返回 TorchVersion 对象)
+TORCHVISION_VERSION = importlib.metadata.version("torchvision")  # torchvision 版本 (直接读取元数据，比导入模块更快)
+
+# 开发环境检测
+IS_VSCODE = os.environ.get("TERM_PROGRAM", False) == "vscode"  # 是否在 VS Code 终端中运行
+
+# 硬件芯片支持 - Rockchip NPU 芯片列表
 RKNN_CHIPS = frozenset(
     {
-        "rk3588",
-        "rk3576",
-        "rk3566",
-        "rk3568",
-        "rk3562",
-        "rv1103",
-        "rv1106",
-        "rv1103b",
-        "rv1106b",
-        "rk2118",
-        "rv1126b",
+        "rk3588",  # 瑞芯微 RK3588 (高性能 SoC)
+        "rk3576",  # 瑞芯微 RK3576
+        "rk3566",  # 瑞芯微 RK3566
+        "rk3568",  # 瑞芯微 RK3568
+        "rk3562",  # 瑞芯微 RK3562
+        "rv1103",  # 瑞芯微 RV1103
+        "rv1106",  # 瑞芯微 RV1106
+        "rv1103b",  # 瑞芯微 RV1103B
+        "rv1106b",  # 瑞芯微 RV1106B
+        "rk2118",  # 瑞芯微 RK2118
+        "rv1126b",  # 瑞芯微 RV1126B
     }
-)  # Rockchip processors available for export
+)  # 支持导出 RKNN 格式的 Rockchip 处理器芯片型号集合 (frozenset 为不可变集合，提升性能)
 HELP_MSG = """
     Examples for running Ultralytics:
 
@@ -125,40 +171,82 @@ HELP_MSG = """
     GitHub: https://github.com/ultralytics/ultralytics
     """
 
-# Settings and Environment Variables
+# ===================================================================================================
+# 全局设置和环境变量配置
+# ===================================================================================================
+
+# PyTorch 打印选项配置
 torch.set_printoptions(linewidth=320, precision=4, profile="default")
-np.set_printoptions(linewidth=320, formatter=dict(float_kind="{:11.5g}".format))  # format short g, %precision=5
-cv2.setNumThreads(0)  # prevent OpenCV from multithreading (incompatible with PyTorch DataLoader)
-os.environ["NUMEXPR_MAX_THREADS"] = str(NUM_THREADS)  # NumExpr max threads
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # suppress verbose TF compiler warnings in Colab
-os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"  # suppress "NNPACK.cpp could not initialize NNPACK" warnings
-os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output when computing FLOPs
+# linewidth=320: 每行最多显示 320 个字符
+# precision=4: 浮点数精度为 4 位小数
+# profile="default": 使用默认打印配置
 
-# Centralized warning suppression
-warnings.filterwarnings("ignore", message="torch.distributed.reduce_op is deprecated")  # PyTorch deprecation
-warnings.filterwarnings("ignore", message="The figure layout has changed to tight")  # matplotlib>=3.7.2
-warnings.filterwarnings("ignore", category=FutureWarning, module="timm")  # mobileclip timm.layers deprecation
-warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)  # ONNX/TorchScript export tracer warnings
-warnings.filterwarnings("ignore", category=UserWarning, message=".*prim::Constant.*")  # ONNX shape warning
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="coremltools")  # CoreML np.bool deprecation
+# NumPy 打印选项配置
+np.set_printoptions(linewidth=320, formatter=dict(float_kind="{:11.5g}".format))
+# linewidth=320: 每行最多显示 320 个字符
+# formatter: 浮点数格式化为科学计数法，总宽度 11，有效数字 5 位
 
-# Precompiled type tuples for faster isinstance() checks
-FLOAT_OR_INT = (float, int)
-STR_OR_PATH = (str, Path)
+# OpenCV 线程设置
+cv2.setNumThreads(0)
+# 禁用 OpenCV 的多线程 (与 PyTorch DataLoader 的多进程不兼容，可能导致死锁)
+
+# 环境变量设置 - 控制第三方库的行为
+os.environ["NUMEXPR_MAX_THREADS"] = str(NUM_THREADS)  # NumExpr 库的最大线程数
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 抑制 TensorFlow 在 Colab 中的详细编译警告 (3=仅显示错误)
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"  # 抑制 PyTorch 的 "NNPACK.cpp could not initialize NNPACK" 警告
+os.environ["KINETO_LOG_LEVEL"] = "5"  # 抑制计算 FLOPs 时 PyTorch profiler 的详细输出
+
+# ===================================================================================================
+# 集中式警告过滤 - 抑制已知的无害警告
+# ===================================================================================================
+
+# PyTorch 相关警告
+warnings.filterwarnings("ignore", message="torch.distributed.reduce_op is deprecated")  # PyTorch 弃用警告
+warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)  # ONNX/TorchScript 导出时的追踪警告
+warnings.filterwarnings("ignore", category=UserWarning, message=".*prim::Constant.*")  # ONNX 形状推断警告
+
+# 第三方库警告
+warnings.filterwarnings("ignore", message="The figure layout has changed to tight")  # matplotlib>=3.7.2 布局变更警告
+warnings.filterwarnings("ignore", category=FutureWarning, module="timm")  # timm 库 (mobileclip) 的弃用警告
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="coremltools")  # CoreML 的 np.bool 弃用警告
+
+# ===================================================================================================
+# 预编译的类型元组 - 用于加速 isinstance() 类型检查
+# ===================================================================================================
+
+FLOAT_OR_INT = (float, int)  # 数值类型 (浮点数或整数)
+STR_OR_PATH = (str, Path)  # 字符串或路径类型
 
 
 class DataExportMixin:
-    """Mixin class for exporting validation metrics or prediction results in various formats.
+    """
+    数据导出混入类 - 用于将验证指标或预测结果导出为多种格式
+
+    Mixin class for exporting validation metrics or prediction results in various formats.
+
+    该类提供了将性能指标 (如 mAP、精确率、召回率) 或预测结果 (分类、目标检测、分割、姿态估计等任务)
+    导出为多种格式的工具方法: Polars DataFrame、CSV 和 JSON。
 
     This class provides utilities to export performance metrics (e.g., mAP, precision, recall) or prediction results
     from classification, object detection, segmentation, or pose estimation tasks into various formats: Polars
     DataFrame, CSV, and JSON.
 
+    方法:
+        to_df: 将摘要转换为 Polars DataFrame
+        to_csv: 将结果导出为 CSV 字符串
+        to_json: 将结果导出为 JSON 字符串
+
     Methods:
         to_df: Convert summary to a Polars DataFrame.
         to_csv: Export results as a CSV string.
         to_json: Export results as a JSON string.
-        tojson: Deprecated alias for `to_json()`.
+
+    示例:
+        >>> model = YOLO("yolo11n.pt")
+        >>> results = model("image.jpg")
+        >>> df = results.to_df()
+        >>> print(df)
+        >>> csv_data = results.to_csv()
 
     Examples:
         >>> model = YOLO("yolo11n.pt")
@@ -169,73 +257,104 @@ class DataExportMixin:
     """
 
     def to_df(self, normalize=False, decimals=5):
-        """Create a Polars DataFrame from the prediction results summary or validation metrics.
+        """
+        从预测结果摘要或验证指标创建 Polars DataFrame
+        Create a Polars DataFrame from the prediction results summary or validation metrics.
 
         Args:
-            normalize (bool, optional): Normalize numerical values for easier comparison.
-            decimals (int, optional): Decimal places to round floats.
+            normalize (bool, optional): 是否归一化数值以便于比较。默认 False
+            decimals (int, optional): 浮点数保留的小数位数。默认 5
 
         Returns:
-            (polars.DataFrame): Polars DataFrame containing the summary data.
+            (polars.DataFrame): 包含摘要数据的 Polars DataFrame
         """
-        import polars as pl  # scope for faster 'import ultralytics'
+        import polars as pl  # 局部导入以加快 'import ultralytics' 速度
 
         return pl.DataFrame(self.summary(normalize=normalize, decimals=decimals))
 
     def to_csv(self, normalize=False, decimals=5):
-        """Export results or metrics to CSV string format.
+        """
+        将结果或指标导出为 CSV 字符串格式
+        Export results or metrics to CSV string format.
 
         Args:
-            normalize (bool, optional): Normalize numeric values.
-            decimals (int, optional): Decimal precision.
+            normalize (bool, optional): 是否归一化数值。默认 False
+            decimals (int, optional): 小数精度。默认 5
 
         Returns:
-            (str): CSV content as string.
+            (str): CSV 内容字符串
         """
-        import polars as pl
+        import polars as pl  # 局部导入
 
         df = self.to_df(normalize=normalize, decimals=decimals)
 
         try:
+            # 尝试直接写入 CSV
             return df.write_csv()
         except Exception:
-            # Minimal string conversion for any remaining complex types
+            # 如果有复杂类型无法序列化，进行最小化字符串转换
             def _to_str_simple(v):
+                """简单的字符串转换函数"""
                 if v is None:
-                    return ""
+                    return ""  # None 转为空字符串
                 elif isinstance(v, (dict, list, tuple, set)):
-                    return repr(v)
+                    return repr(v)  # 复杂类型转为字符串表示
                 else:
-                    return str(v)
+                    return str(v)  # 其他类型直接转字符串
 
+            # 将所有列转换为字符串类型
             df_str = df.select(
                 [pl.col(c).map_elements(_to_str_simple, return_dtype=pl.String).alias(c) for c in df.columns]
             )
             return df_str.write_csv()
 
     def to_json(self, normalize=False, decimals=5):
-        """Export results to JSON format.
+        """
+        将结果导出为 JSON 格式
+        Export results to JSON format.
 
         Args:
-            normalize (bool, optional): Normalize numeric values.
-            decimals (int, optional): Decimal precision.
+            normalize (bool, optional): 是否归一化数值。默认 False
+            decimals (int, optional): 小数精度。默认 5
 
         Returns:
-            (str): JSON-formatted string of the results.
+            (str): 结果的 JSON 格式字符串
         """
         return self.to_df(normalize=normalize, decimals=decimals).write_json()
 
 
 class SimpleClass:
-    """A simple base class for creating objects with string representations of their attributes.
+    """
+    简单基类 - 为对象提供友好的字符串表示
+    A simple base class for creating objects with string representations of their attributes.
+
+    该类为创建可轻松打印或表示为字符串的对象提供基础，显示所有非可调用属性。
+    对于调试和检查对象状态非常有用。
 
     This class provides a foundation for creating objects that can be easily printed or represented as strings, showing
     all their non-callable attributes. It's useful for debugging and introspection of object states.
+
+    方法:
+        __str__: 返回对象的人类可读字符串表示
+        __repr__: 返回对象的机器可读字符串表示
+        __getattr__: 提供自定义的属性访问错误消息
 
     Methods:
         __str__: Return a human-readable string representation of the object.
         __repr__: Return a machine-readable string representation of the object.
         __getattr__: Provide a custom attribute access error message with helpful information.
+
+    示例:
+        >>> class MyClass(SimpleClass):
+        ...     def __init__(self):
+        ...         self.x = 10
+        ...         self.y = "hello"
+        >>> obj = MyClass()
+        >>> print(obj)
+        __main__.MyClass object with attributes:
+
+        x: 10
+        y: 'hello'
 
     Examples:
         >>> class MyClass(SimpleClass):
@@ -249,6 +368,11 @@ class SimpleClass:
         x: 10
         y: 'hello'
 
+    注意:
+        - 该类设计用于被子类化，提供方便的对象属性检查方式
+        - 字符串表示包含对象的模块名和类名
+        - 可调用属性和以下划线开头的属性不会显示在字符串表示中
+
     Notes:
         - This class is designed to be subclassed. It provides a convenient way to inspect object attributes.
         - The string representation includes the module and class name of the object.
@@ -256,25 +380,36 @@ class SimpleClass:
     """
 
     def __str__(self):
-        """Return a human-readable string representation of the object."""
+        """
+        返回对象的人类可读字符串表示
+        Return a human-readable string representation of the object.
+        """
         attr = []
-        for a in dir(self):
-            v = getattr(self, a)
-            if not callable(v) and not a.startswith("_"):
+        for a in dir(self):  # 遍历对象的所有属性
+            v = getattr(self, a)  # 获取属性值
+            if not callable(v) and not a.startswith("_"):  # 排除方法和私有属性
                 if isinstance(v, SimpleClass):
-                    # Display only the module and class name for subclasses
+                    # 如果属性值也是 SimpleClass 的子类，只显示模块名和类名
                     s = f"{a}: {v.__module__}.{v.__class__.__name__} object"
                 else:
+                    # 其他类型使用 repr() 显示
                     s = f"{a}: {v!r}"
                 attr.append(s)
+        # 返回格式化的属性列表
         return f"{self.__module__}.{self.__class__.__name__} object with attributes:\n\n" + "\n".join(attr)
 
     def __repr__(self):
-        """Return a machine-readable string representation of the object."""
+        """
+        返回对象的机器可读字符串表示
+        Return a machine-readable string representation of the object.
+        """
         return self.__str__()
 
     def __getattr__(self, attr):
-        """Provide a custom attribute access error message with helpful information."""
+        """
+        提供自定义的属性访问错误消息
+        Provide a custom attribute access error message with helpful information.
+        """
         name = self.__class__.__name__
         raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
 

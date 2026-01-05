@@ -1,5 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 from pathlib import Path
 
 from ultralytics.data import YOLOConcatDataset, build_grounding, build_yolo_dataset
@@ -10,25 +8,24 @@ from ultralytics.utils.torch_utils import unwrap_model
 
 
 class WorldTrainerFromScratch(WorldTrainer):
-    """A class extending the WorldTrainer for training a world model from scratch on open-set datasets.
+    """扩展 WorldTrainer 类的从零开始训练 world 模型的训练器类
 
-    This trainer specializes in handling mixed datasets including both object detection and grounding datasets,
-    supporting training YOLO-World models with combined vision-language capabilities.
+    该训练器专门处理混合数据集,包括目标检测数据集和 grounding 数据集,支持训练具有组合视觉-语言能力的 YOLO-World 模型。
 
-    Attributes:
-        cfg (dict): Configuration dictionary with default parameters for model training.
-        overrides (dict): Dictionary of parameter overrides to customize the configuration.
-        _callbacks (list): List of callback functions to be executed during different stages of training.
-        data (dict): Final processed data configuration containing train/val paths and metadata.
-        training_data (dict): Dictionary mapping training dataset paths to their configurations.
+    属性:
+        cfg (dict): 包含模型训练默认参数的配置字典
+        overrides (dict): 用于自定义配置的参数覆盖字典
+        _callbacks (list): 在训练不同阶段执行的回调函数列表
+        data (dict): 包含 train/val 路径和元数据的最终处理数据配置
+        training_data (dict): 将训练数据集路径映射到其配置的字典
 
-    Methods:
-        build_dataset: Build YOLO Dataset for training or validation with mixed dataset support.
-        get_dataset: Get train and validation paths from data dictionary.
-        plot_training_labels: Skip label plotting for YOLO-World training.
-        final_eval: Perform final evaluation and validation for the YOLO-World model.
+    方法:
+        build_dataset: 构建用于训练或验证的 YOLO 数据集,支持混合数据集
+        get_dataset: 从数据字典获取训练和验证路径
+        plot_training_labels: 跳过 YOLO-World 训练的标签绘制
+        final_eval: 对 YOLO-World 模型执行最终评估和验证
 
-    Examples:
+    示例:
         >>> from ultralytics.models.yolo.world.train_world import WorldTrainerFromScratch
         >>> from ultralytics import YOLOWorld
         >>> data = dict(
@@ -52,33 +49,31 @@ class WorldTrainerFromScratch(WorldTrainer):
     """
 
     def __init__(self, cfg=DEFAULT_CFG, overrides=None, _callbacks=None):
-        """Initialize a WorldTrainerFromScratch object.
+        """初始化 WorldTrainerFromScratch 对象
 
-        This initializes a trainer for YOLO-World models from scratch, supporting mixed datasets including both object
-        detection and grounding datasets for vision-language capabilities.
+        该方法初始化从零开始训练 YOLO-World 模型的训练器,支持包括目标检测和 grounding 数据集在内的混合数据集以实现视觉-语言能力。
 
-        Args:
-            cfg (dict): Configuration dictionary with default parameters for model training.
-            overrides (dict, optional): Dictionary of parameter overrides to customize the configuration.
-            _callbacks (list, optional): List of callback functions to be executed during different stages of training.
+        参数:
+            cfg (dict): 包含模型训练默认参数的配置字典
+            overrides (dict, optional): 用于自定义配置的参数覆盖字典
+            _callbacks (list, optional): 在训练不同阶段执行的回调函数列表
         """
         if overrides is None:
             overrides = {}
         super().__init__(cfg, overrides, _callbacks)
 
     def build_dataset(self, img_path, mode="train", batch=None):
-        """Build YOLO Dataset for training or validation.
+        """构建用于训练或验证的 YOLO 数据集
 
-        This method constructs appropriate datasets based on the mode and input paths, handling both standard YOLO
-        datasets and grounding datasets with different formats.
+        该方法根据模式和输入路径构建适当的数据集,处理标准 YOLO 数据集和不同格式的 grounding 数据集。
 
-        Args:
-            img_path (list[str] | str): Path to the folder containing images or list of paths.
-            mode (str): 'train' mode or 'val' mode, allowing customized augmentations for each mode.
-            batch (int, optional): Size of batches, used for rectangular training/validation.
+        参数:
+            img_path (list[str] | str): 包含图像的文件夹路径或路径列表
+            mode (str): 'train' 模式或 'val' 模式,允许为每个模式自定义数据增强
+            batch (int, optional): 批次大小,用于矩形训练/验证
 
-        Returns:
-            (YOLOConcatDataset | Dataset): The constructed dataset for training or validation.
+        返回:
+            (YOLOConcatDataset | Dataset): 构建的用于训练或验证的数据集
         """
         gs = max(int(unwrap_model(self.model).stride.max() if self.model else 0), 32)
         if mode != "train":
@@ -87,7 +82,7 @@ class WorldTrainerFromScratch(WorldTrainer):
             build_yolo_dataset(self.args, im_path, batch, self.training_data[im_path], stride=gs, multi_modal=True)
             if isinstance(im_path, str)
             else build_grounding(
-                # assign `nc` from validation set to max number of text samples for training consistency
+                # 从验证集分配 `nc` 作为文本样本的最大数量以保持训练一致性
                 self.args,
                 im_path["img_path"],
                 im_path["json_file"],
@@ -97,59 +92,58 @@ class WorldTrainerFromScratch(WorldTrainer):
             )
             for im_path in img_path
         ]
-        self.set_text_embeddings(datasets, batch)  # cache text embeddings to accelerate training
+        self.set_text_embeddings(datasets, batch)  # 缓存文本嵌入以加速训练
         return YOLOConcatDataset(datasets) if len(datasets) > 1 else datasets[0]
 
     def get_dataset(self):
-        """Get train and validation paths from data dictionary.
+        """从数据字典获取训练和验证路径
 
-        Processes the data configuration to extract paths for training and validation datasets, handling both YOLO
-        detection datasets and grounding datasets.
+        处理数据配置以提取训练和验证数据集的路径,处理 YOLO 检测数据集和 grounding 数据集。
 
-        Returns:
-            train_path (str): Train dataset path.
-            val_path (str): Validation dataset path.
+        返回:
+            train_path (str): 训练数据集路径
+            val_path (str): 验证数据集路径
 
-        Raises:
-            AssertionError: If train or validation datasets are not found, or if validation has multiple datasets.
+        异常:
+            AssertionError: 如果未找到训练或验证数据集,或者验证有多个数据集
         """
         final_data = {}
         data_yaml = self.args.data
-        assert data_yaml.get("train", False), "train dataset not found"  # object365.yaml
-        assert data_yaml.get("val", False), "validation dataset not found"  # lvis.yaml
+        assert data_yaml.get("train", False), "未找到训练数据集"  # object365.yaml
+        assert data_yaml.get("val", False), "未找到验证数据集"  # lvis.yaml
         data = {k: [check_det_dataset(d) for d in v.get("yolo_data", [])] for k, v in data_yaml.items()}
-        assert len(data["val"]) == 1, f"Only support validating on 1 dataset for now, but got {len(data['val'])}."
+        assert len(data["val"]) == 1, f"目前仅支持在 1 个数据集上验证,但得到 {len(data['val'])} 个。"
         val_split = "minival" if "lvis" in data["val"][0]["val"] else "val"
         for d in data["val"]:
-            if d.get("minival") is None:  # for lvis dataset
+            if d.get("minival") is None:  # 对于 lvis 数据集
                 continue
             d["minival"] = str(d["path"] / d["minival"])
         for s in {"train", "val"}:
             final_data[s] = [d["train" if s == "train" else val_split] for d in data[s]]
-            # save grounding data if there's one
+            # 如果有 grounding 数据则保存
             grounding_data = data_yaml[s].get("grounding_data")
             if grounding_data is None:
                 continue
             grounding_data = grounding_data if isinstance(grounding_data, list) else [grounding_data]
             for g in grounding_data:
-                assert isinstance(g, dict), f"Grounding data should be provided in dict format, but got {type(g)}"
+                assert isinstance(g, dict), f"Grounding 数据应以字典格式提供,但得到 {type(g)}"
                 for k in {"img_path", "json_file"}:
                     path = Path(g[k])
                     if not path.exists() and not path.is_absolute():
-                        g[k] = str((DATASETS_DIR / g[k]).resolve())  # path relative to DATASETS_DIR
+                        g[k] = str((DATASETS_DIR / g[k]).resolve())  # 相对于 DATASETS_DIR 的路径
             final_data[s] += grounding_data
-        # assign the first val dataset as currently only one validation set is supported
+        # 分配第一个验证数据集,因为目前仅支持一个验证集
         data["val"] = data["val"][0]
         final_data["val"] = final_data["val"][0]
-        # NOTE: to make training work properly, set `nc` and `names`
+        # 注意: 为了使训练正常工作,设置 `nc` 和 `names`
         final_data["nc"] = data["val"]["nc"]
         final_data["names"] = data["val"]["names"]
-        # NOTE: add path with lvis path
+        # 注意: 添加 lvis 路径
         final_data["path"] = data["val"]["path"]
         final_data["channels"] = data["val"]["channels"]
         self.data = final_data
-        if self.args.single_cls:  # consistent with base trainer
-            LOGGER.info("Overriding class names with single class.")
+        if self.args.single_cls:  # 与基础训练器保持一致
+            LOGGER.info("用单类覆盖类别名称。")
             self.data["names"] = {0: "object"}
             self.data["nc"] = 1
         self.training_data = {}
@@ -161,16 +155,16 @@ class WorldTrainerFromScratch(WorldTrainer):
         return final_data
 
     def plot_training_labels(self):
-        """Skip label plotting for YOLO-World training."""
+        """跳过 YOLO-World 训练的标签绘制"""
         pass
 
     def final_eval(self):
-        """Perform final evaluation and validation for the YOLO-World model.
+        """对 YOLO-World 模型执行最终评估和验证
 
-        Configures the validator with appropriate dataset and split information before running evaluation.
+        在运行评估之前,使用适当的数据集和划分信息配置验证器。
 
-        Returns:
-            (dict): Dictionary containing evaluation metrics and results.
+        返回:
+            (dict): 包含评估指标和结果的字典
         """
         val = self.args.data["val"]["yolo_data"][0]
         self.validator.args.data = val

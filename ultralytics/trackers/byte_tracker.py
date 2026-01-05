@@ -1,16 +1,40 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+ByteTrack 多目标追踪算法实现
 
-from __future__ import annotations
+此模块实现了 ByteTrack 算法，这是一种简单、快速且强大的多目标追踪方法。
+ByteTrack 的核心思想是利用低置信度检测框来恢复被遮挡的目标，提高追踪召回率。
 
-from typing import Any
+主要特点:
+    - 高性能：基于卡尔曼滤波的运动预测
+    - 鲁棒性：通过二次关联恢复低置信度目标
+    - 简洁性：不依赖复杂的 ReID 特征提取
 
-import numpy as np
+核心类:
+    - STrack: 单个追踪目标，包含卡尔曼滤波器和状态管理
+    - BYTETracker: ByteTrack 追踪器主类，管理所有追踪目标
 
-from ..utils import LOGGER
-from ..utils.ops import xywh2ltwh
-from .basetrack import BaseTrack, TrackState
-from .utils import matching
-from .utils.kalman_filter import KalmanFilterXYAH
+算法流程:
+    1. 将检测结果分为高置信度和低置信度两组
+    2. 用高置信度检测与已有追踪进行第一次关联
+    3. 用低置信度检测与剩余追踪进行第二次关联
+    4. 初始化新追踪并移除长时间丢失的追踪
+
+参考文献:
+    ByteTrack: Multi-Object Tracking by Associating Every Detection Box
+    https://arxiv.org/abs/2110.06864
+"""
+
+from __future__ import annotations  # 启用延迟类型注解
+
+from typing import Any  # 类型提示
+
+import numpy as np  # 数值计算
+
+from ..utils import LOGGER  # 日志记录器
+from ..utils.ops import xywh2ltwh  # 坐标转换工具：中心点格式转左上角格式
+from .basetrack import BaseTrack, TrackState  # 基础追踪类和状态枚举
+from .utils import matching  # 匹配算法模块
+from .utils.kalman_filter import KalmanFilterXYAH  # 卡尔曼滤波器（XYAH 格式）
 
 
 class STrack(BaseTrack):
@@ -53,66 +77,105 @@ class STrack(BaseTrack):
     shared_kalman = KalmanFilterXYAH()
 
     def __init__(self, xywh: list[float], score: float, cls: Any):
-        """Initialize a new STrack instance.
+        """
 
         Args:
             xywh (list[float]): Bounding box in `(x, y, w, h, idx)` or `(x, y, w, h, angle, idx)` format, where (x, y)
                 is the center, (w, h) are width and height, and `idx` is the detection index.
+                边界框坐标，格式为 (中心x, 中心y, 宽度, 高度, 索引) 或带角度的 OBB 格式
             score (float): Confidence score of the detection.
+                检测的置信度分数
             cls (Any): Class label for the detected object.
+                检测目标的类别标签
         """
         super().__init__()
         # xywh+idx or xywha+idx
+        # 验证输入格式：5个值（普通框）或6个值（带角度的 OBB 框）
         assert len(xywh) in {5, 6}, f"expected 5 or 6 values but got {len(xywh)}"
+        # 将中心点格式转换为左上角格式 (top-left x, top-left y, width, height)
         self._tlwh = np.asarray(xywh2ltwh(xywh[:4]), dtype=np.float32)
+        # 初始化卡尔曼滤波器为 None，稍后在 activate 时初始化
         self.kalman_filter = None
+        # 卡尔曼滤波器的均值和协方差矩阵
         self.mean, self.covariance = None, None
+        # 追踪是否已激活的标志
         self.is_activated = False
 
-        self.score = score
-        self.tracklet_len = 0
-        self.cls = cls
-        self.idx = xywh[-1]
-        self.angle = xywh[4] if len(xywh) == 6 else None
+        # 保存检测属性
+        self.score = score  # 置信度分数
+        self.tracklet_len = 0  # 追踪长度（成功追踪的帧数）
+        self.cls = cls  # 类别标签
+        self.idx = xywh[-1]  # 检测索引
+        self.angle = xywh[4] if len(xywh) == 6 else None  # 旋转角度（OBB 专用）
 
     def predict(self):
-        """Predict the next state (mean and covariance) of the object using the Kalman filter."""
+        """
+        使用卡尔曼滤波器预测目标在下一帧的状态（位置和速度）。
+        如果目标不在 Tracked 状态，则将纵横比变化速度设为 0。
+        """
         mean_state = self.mean.copy()
+        # 如果追踪状态不是 Tracked（即 Lost 或其他状态），将纵横比变化速度设为 0
+        # mean_state[7] 对应 XYAH 格式中的 vh（纵横比变化速度）
         if self.state != TrackState.Tracked:
             mean_state[7] = 0
+        # 执行卡尔曼滤波的预测步骤，更新均值和协方差
         self.mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
 
     @staticmethod
     def multi_predict(stracks: list[STrack]):
-        """Perform multi-object predictive tracking using Kalman filter for the provided list of STrack instances."""
+        """
+        批量预测多个追踪目标的状态，提高计算效率。
+        使用共享的卡尔曼滤波器对所有追踪进行向量化预测。
+        """
         if len(stracks) <= 0:
             return
+        # 收集所有追踪的均值和协方差矩阵
         multi_mean = np.asarray([st.mean.copy() for st in stracks])
         multi_covariance = np.asarray([st.covariance for st in stracks])
+        # 对于非 Tracked 状态的追踪，将纵横比变化速度设为 0
         for i, st in enumerate(stracks):
             if st.state != TrackState.Tracked:
                 multi_mean[i][7] = 0
+        # 使用共享卡尔曼滤波器进行批量预测（向量化操作，高效）
         multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
+        # 将预测结果更新回各个追踪对象
         for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
             stracks[i].mean = mean
             stracks[i].covariance = cov
 
     @staticmethod
     def multi_gmc(stracks: list[STrack], H: np.ndarray = np.eye(2, 3)):
-        """Update state tracks positions and covariances using a homography matrix for multiple tracks."""
+        """Update state tracks positions and covariances using a homography matrix for multiple tracks.
+
+        使用单应性矩阵（Homography）批量更新多个追踪的位置和协方差。
+        这用于补偿摄像头运动（GMC - Global Motion Compensation）。
+
+        Args:
+            stracks: 要更新的追踪列表
+            H: 2x3 的仿射变换矩阵，默认为单位矩阵（无变换）
+        """
         if stracks:
+            # 收集所有追踪的均值和协方差
             multi_mean = np.asarray([st.mean.copy() for st in stracks])
             multi_covariance = np.asarray([st.covariance for st in stracks])
 
+            # 提取旋转部分（2x2）和平移部分
             R = H[:2, :2]
+            # 构造 8x8 的旋转矩阵（用于 8 维状态空间）
+            # 使用 Kronecker 积将 2x2 旋转矩阵扩展到 8x8
             R8x8 = np.kron(np.eye(4, dtype=float), R)
-            t = H[:2, 2]
+            t = H[:2, 2]  # 平移向量
 
+            # 对每个追踪应用变换
             for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
+                # 应用旋转变换到状态向量
                 mean = R8x8.dot(mean)
+                # 应用平移到位置部分
                 mean[:2] += t
+                # 应用旋转变换到协方差矩阵
                 cov = R8x8.dot(cov).dot(R8x8.transpose())
 
+                # 更新追踪对象的状态
                 stracks[i].mean = mean
                 stracks[i].covariance = cov
 
@@ -281,66 +344,107 @@ class BYTETracker:
         self.reset_id()
 
     def update(self, results, img: np.ndarray | None = None, feats: np.ndarray | None = None) -> np.ndarray:
-        """Update the tracker with new detections and return the current list of tracked objects."""
-        self.frame_id += 1
-        activated_stracks = []
-        refind_stracks = []
-        lost_stracks = []
-        removed_stracks = []
+        """Update the tracker with new detections and return the current list of tracked objects.
 
+        使用新检测结果更新追踪器，返回当前所有追踪目标的列表。
+        这是 ByteTrack 算法的核心方法，实现了多阶段的数据关联策略。
+
+        Args:
+            results: 检测结果，包含边界框、置信度和类别
+            img: 原始图像（可选，用于 GMC）
+            feats: 特征向量（可选，用于外观匹配）
+
+        Returns:
+            np.ndarray: 追踪结果数组，每行包含 [xyxy/xywha, track_id, score, cls, idx]
+        """
+        self.frame_id += 1  # 增加帧计数器
+        # 初始化本帧的追踪状态列表
+        activated_stracks = []  # 新激活的追踪
+        refind_stracks = []  # 重新找到的追踪（从丢失状态恢复）
+        lost_stracks = []  # 新丢失的追踪
+        removed_stracks = []  # 要移除的追踪
+
+        # ===== Step 1: 将检测结果按置信度分为高低两组 =====
         scores = results.conf
+        # 高置信度检测（大于等于 track_high_thresh，通常 0.5-0.6）
         remain_inds = scores >= self.args.track_high_thresh
+        # 低置信度检测（大于 track_low_thresh 但小于 track_high_thresh）
         inds_low = scores > self.args.track_low_thresh
         inds_high = scores < self.args.track_high_thresh
 
+        # 低置信度检测索引：同时满足 > track_low_thresh 和 < track_high_thresh
         inds_second = inds_low & inds_high
-        results_second = results[inds_second]
-        results = results[remain_inds]
+        results_second = results[inds_second]  # 第二次关联用的低置信度检测
+        results = results[remain_inds]  # 第一次关联用的高置信度检测
+        # 准备特征向量（如果提供）
         feats_keep = feats_second = img
         if feats is not None and len(feats):
             feats_keep = feats[remain_inds]
             feats_second = feats[inds_second]
 
+        # 将高置信度检测初始化为 STrack 对象
         detections = self.init_track(results, feats_keep)
+
+        # ===== 分类现有追踪：未确认的和已确认的 =====
         # Add newly detected tracklets to tracked_stracks
-        unconfirmed = []
-        tracked_stracks = []  # type: list[STrack]
+        unconfirmed = []  # 未确认的追踪（首次出现）
+        tracked_stracks = []  # type: list[STrack]  # 已确认的追踪
         for track in self.tracked_stracks:
             if not track.is_activated:
                 unconfirmed.append(track)
             else:
                 tracked_stracks.append(track)
+
+        # ===== Step 2: 第一次关联（高置信度检测 vs 已有追踪） =====
         # Step 2: First association, with high score detection boxes
+        # 合并已追踪目标和丢失目标作为候选池
         strack_pool = self.joint_stracks(tracked_stracks, self.lost_stracks)
+        # 使用卡尔曼滤波预测所有追踪目标的当前位置
         # Predict the current location with KF
         self.multi_predict(strack_pool)
+        # 如果有 GMC（全局运动补偿）模块，则补偿摄像头运动
         if hasattr(self, "gmc") and img is not None:
             # use try-except here to bypass errors from gmc module
             try:
+                # 计算帧间的仿射变换矩阵
                 warp = self.gmc.apply(img, results.xyxy)
             except Exception:
+                # 如果 GMC 失败，使用单位矩阵（无变换）
                 warp = np.eye(2, 3)
+            # 对所有追踪应用 GMC 变换
             STrack.multi_gmc(strack_pool, warp)
             STrack.multi_gmc(unconfirmed, warp)
 
+        # 计算追踪与检测之间的距离（IoU 距离，可选融合置信度）
         dists = self.get_dists(strack_pool, detections)
+        # 使用匈牙利算法进行线性分配，得到匹配对
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh)
 
+        # 处理匹配成功的追踪
         for itracked, idet in matches:
             track = strack_pool[itracked]
             det = detections[idet]
             if track.state == TrackState.Tracked:
+                # 如果追踪已激活，更新状态
                 track.update(det, self.frame_id)
                 activated_stracks.append(track)
             else:
+                # 如果是丢失状态，重新激活
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
+
+        # ===== Step 3: 第二次关联（低置信度检测 vs 剩余追踪） =====
         # Step 3: Second association, with low score detection boxes association the untrack to the low score detections
+        # 将低置信度检测初始化为 STrack 对象
         detections_second = self.init_track(results_second, feats_second)
+        # 从第一次关联未匹配的追踪中，筛选出仍在 Tracked 状态的
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
         # TODO: consider fusing scores or appearance features for second association.
+        # 计算 IoU 距离（低置信度检测与剩余追踪）
         dists = matching.iou_distance(r_tracked_stracks, detections_second)
+        # 使用较低的阈值（0.5）进行第二次关联
         matches, u_track, _u_detection_second = matching.linear_assignment(dists, thresh=0.5)
+        # 处理第二次关联的匹配结果
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
@@ -351,46 +455,66 @@ class BYTETracker:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
 
+        # 将第二次关联仍未匹配的追踪标记为丢失
         for it in u_track:
             track = r_tracked_stracks[it]
             if track.state != TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
+
+        # ===== 处理未确认的追踪（首次出现的目标） =====
         # Deal with unconfirmed tracks, usually tracks with only one beginning frame
+        # 从第一次关联未匹配的高置信度检测中筛选
         detections = [detections[i] for i in u_detection]
         dists = self.get_dists(unconfirmed, detections)
+        # 使用较高阈值（0.7）匹配未确认追踪
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_stracks.append(unconfirmed[itracked])
+        # 未确认追踪如果未匹配，直接移除
         for it in u_unconfirmed:
             track = unconfirmed[it]
             track.mark_removed()
             removed_stracks.append(track)
+
+        # ===== Step 4: 初始化新追踪 =====
         # Step 4: Init new stracks
+        # 对于仍未匹配的高置信度检测，初始化为新追踪
         for inew in u_detection:
             track = detections[inew]
+            # 检查置信度是否达到新追踪阈值
             if track.score < self.args.new_track_thresh:
                 continue
+            # 激活新追踪
             track.activate(self.kalman_filter, self.frame_id)
             activated_stracks.append(track)
+
+        # ===== Step 5: 更新追踪器状态 =====
         # Step 5: Update state
+        # 移除长时间丢失的追踪
         for track in self.lost_stracks:
             if self.frame_id - track.end_frame > self.max_time_lost:
                 track.mark_removed()
                 removed_stracks.append(track)
 
+        # 更新追踪列表：保留 Tracked 状态的追踪
         self.tracked_stracks = [t for t in self.tracked_stracks if t.state == TrackState.Tracked]
+        # 合并新激活和重新找到的追踪
         self.tracked_stracks = self.joint_stracks(self.tracked_stracks, activated_stracks)
         self.tracked_stracks = self.joint_stracks(self.tracked_stracks, refind_stracks)
+        # 更新丢失列表：移除已重新追踪的目标
         self.lost_stracks = self.sub_stracks(self.lost_stracks, self.tracked_stracks)
         self.lost_stracks.extend(lost_stracks)
         self.lost_stracks = self.sub_stracks(self.lost_stracks, self.removed_stracks)
+        # 移除重复的追踪（基于 IoU）
         self.tracked_stracks, self.lost_stracks = self.remove_duplicate_stracks(self.tracked_stracks, self.lost_stracks)
+        # 更新移除列表并限制大小
         self.removed_stracks.extend(removed_stracks)
         if len(self.removed_stracks) > 1000:
             self.removed_stracks = self.removed_stracks[-1000:]  # clip removed stracks to 1000 maximum
 
+        # 返回所有已激活追踪的结果
         return np.asarray([x.result for x in self.tracked_stracks if x.is_activated], dtype=np.float32)
 
     def get_kalmanfilter(self) -> KalmanFilterXYAH:

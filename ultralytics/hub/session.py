@@ -1,20 +1,47 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+"""
+Ultralytics HUB 训练会话管理模块
 
-from __future__ import annotations
+该模块负责管理与 Ultralytics HUB 的训练会话，包括模型创建、加载、上传以及指标跟踪。
+它封装了与 HUB 平台交互的所有核心功能，使用户能够在云端训练 YOLO 模型。
 
-import shutil
-import threading
-import time
-from http import HTTPStatus
-from pathlib import Path
-from typing import Any
-from urllib.parse import parse_qs, urlparse
+主要功能:
+    - 创建和加载 HUB 模型
+    - 管理训练会话的生命周期
+    - 上传训练指标和模型检查点
+    - 处理网络请求的重试和超时
+    - 支持断点续训
+    - 进度跟踪和显示
 
-from ultralytics import __version__
-from ultralytics.hub.utils import HELP_MSG, HUB_WEB_ROOT, PREFIX
-from ultralytics.utils import IS_COLAB, LOGGER, SETTINGS, TQDM, checks, emojis
-from ultralytics.utils.errors import HUBModelError
+典型使用流程:
+    1. 创建或加载模型
+    2. 开始训练会话
+    3. 定期上传训练指标
+    4. 上传模型检查点
+    5. 完成训练并上传最终模型
 
+Classes:
+    HUBTrainingSession: HUB 训练会话管理类
+"""
+
+from __future__ import annotations  # 支持类型注解中的前向引用
+
+# 导入标准库
+import shutil  # 文件操作工具
+import threading  # 线程支持
+import time  # 时间相关功能
+from http import HTTPStatus  # HTTP 状态码
+from pathlib import Path  # 路径操作
+from typing import Any  # 类型注解
+from urllib.parse import parse_qs, urlparse  # URL 解析工具
+
+# 导入 Ultralytics 核心组件
+from ultralytics import __version__  # 版本号
+from ultralytics.hub.utils import HELP_MSG, HUB_WEB_ROOT, PREFIX  # HUB 工具和常量
+from ultralytics.utils import IS_COLAB, LOGGER, SETTINGS, TQDM, checks, emojis  # 通用工具
+from ultralytics.utils.errors import HUBModelError  # HUB 模型错误类
+
+# 代理名称：用于标识客户端类型（Colab 或本地）
 AGENT_NAME = f"python-{__version__}-colab" if IS_COLAB else f"python-{__version__}-local"
 
 
@@ -55,34 +82,37 @@ class HUBTrainingSession:
             ConnectionError: If connecting with global API key is not supported.
             ModuleNotFoundError: If hub-sdk package is not installed.
         """
-        from hub_sdk import HUBClient
+        from hub_sdk import HUBClient  # 导入 HUB 客户端
 
-        self.rate_limits = {"metrics": 3, "ckpt": 900, "heartbeat": 300}  # rate limits (seconds)
-        self.metrics_queue = {}  # holds metrics for each epoch until upload
-        self.metrics_upload_failed_queue = {}  # holds metrics for each epoch if upload failed
-        self.timers = {}  # holds timers in ultralytics/utils/callbacks/hub.py
-        self.model = None
-        self.model_url = None
-        self.model_file = None
-        self.train_args = None
+        # 设置速率限制（单位：秒）
+        # metrics: 指标上传间隔，ckpt: 检查点上传间隔，heartbeat: 心跳间隔
+        self.rate_limits = {"metrics": 3, "ckpt": 900, "heartbeat": 300}
+        self.metrics_queue = {}  # 保存每个 epoch 的指标，直到上传
+        self.metrics_upload_failed_queue = {}  # 保存上传失败的指标
+        self.timers = {}  # 保存计时器（在 ultralytics/utils/callbacks/hub.py 中使用）
+        self.model = None  # HUB 模型对象
+        self.model_url = None  # 模型的 HUB URL
+        self.model_file = None  # 模型文件路径
+        self.train_args = None  # 训练参数
 
-        # Parse input
+        # 解析输入标识符
         api_key, model_id, self.filename = self._parse_identifier(identifier)
 
-        # Get credentials
+        # 获取认证凭据
         active_key = api_key or SETTINGS.get("api_key")
-        credentials = {"api_key": active_key} if active_key else None  # set credentials
+        credentials = {"api_key": active_key} if active_key else None
 
-        # Initialize client
+        # 初始化 HUB 客户端
         self.client = HUBClient(credentials)
 
-        # Load models
+        # 加载模型
         try:
             if model_id:
-                self.load_model(model_id)  # load existing model
+                self.load_model(model_id)  # 加载现有模型
             else:
-                self.model = self.client.model()  # load empty model
+                self.model = self.client.model()  # 加载空模型
         except Exception:
+            # 如果是 HUB 模型 URL 且用户未认证，提示登录
             if identifier.startswith(f"{HUB_WEB_ROOT}/models/") and not self.client.authenticated:
                 LOGGER.warning(
                     f"{PREFIX}Please log in using 'yolo login API_KEY'. "
@@ -119,18 +149,22 @@ class HUBTrainingSession:
         Raises:
             ValueError: If the specified HUB model does not exist.
         """
+        # 从 HUB 客户端加载模型
         self.model = self.client.model(model_id)
-        if not self.model.data:  # then model does not exist
-            raise ValueError(emojis("❌ The specified HUB model does not exist"))  # TODO: improve error handling
+        if not self.model.data:  # 模型不存在
+            raise ValueError(emojis("❌ The specified HUB model does not exist"))  # TODO: 改进错误处理
 
+        # 设置模型 URL
         self.model_url = f"{HUB_WEB_ROOT}/models/{self.model.id}"
         if self.model.is_trained():
+            # 如果模型已训练完成，下载最佳权重
             LOGGER.info(f"Loading trained HUB model {self.model_url} 🚀")
-            url = self.model.get_weights_url("best")  # download URL with auth
+            url = self.model.get_weights_url("best")  # 获取带认证的下载 URL
+            # 下载模型文件到本地
             self.model_file = checks.check_file(url, download_dir=Path(SETTINGS["weights_dir"]) / "hub" / self.model.id)
             return
 
-        # Set training args and start heartbeats for HUB to monitor agent
+        # 设置训练参数并启动心跳，让 HUB 监控代理状态
         self._set_train_args()
         self.model.start_heartbeat(self.rate_limits["heartbeat"])
         LOGGER.info(f"{PREFIX}View model at {self.model_url} 🚀")
@@ -145,36 +179,41 @@ class HUBTrainingSession:
         Returns:
             (None): If the model could not be created.
         """
+        # 构建模型创建的负载数据
         payload = {
             "config": {
-                "batchSize": model_args.get("batch", -1),
-                "epochs": model_args.get("epochs", 300),
-                "imageSize": model_args.get("imgsz", 640),
-                "patience": model_args.get("patience", 100),
-                "device": str(model_args.get("device", "")),  # convert None to string
-                "cache": str(model_args.get("cache", "ram")),  # convert True, False, None to string
+                "batchSize": model_args.get("batch", -1),  # 批次大小
+                "epochs": model_args.get("epochs", 300),  # 训练轮数
+                "imageSize": model_args.get("imgsz", 640),  # 图像尺寸
+                "patience": model_args.get("patience", 100),  # 早停耐心值
+                "device": str(model_args.get("device", "")),  # 设备（将 None 转为字符串）
+                "cache": str(model_args.get("cache", "ram")),  # 缓存方式（将 True, False, None 转为字符串）
             },
-            "dataset": {"name": model_args.get("data")},
+            "dataset": {"name": model_args.get("data")},  # 数据集名称
             "lineage": {
+                # 架构信息：从文件名中移除扩展名
                 "architecture": {"name": self.filename.replace(".pt", "").replace(".yaml", "")},
-                "parent": {},
+                "parent": {},  # 父模型信息
             },
-            "meta": {"name": self.filename},
+            "meta": {"name": self.filename},  # 元数据：模型文件名
         }
 
+        # 如果是预训练模型（.pt 文件），设置父模型名称
         if self.filename.endswith(".pt"):
             payload["lineage"]["parent"]["name"] = self.filename
 
+        # 调用 HUB API 创建模型
         self.model.create_model(payload)
 
-        # Model could not be created
-        # TODO: improve error handling
+        # 如果模型创建失败
+        # TODO: 改进错误处理
         if not self.model.id:
             return None
 
+        # 设置模型 URL
         self.model_url = f"{HUB_WEB_ROOT}/models/{self.model.id}"
 
-        # Start heartbeats for HUB to monitor agent
+        # 启动心跳，让 HUB 监控代理状态
         self.model.start_heartbeat(self.rate_limits["heartbeat"])
 
         LOGGER.info(f"{PREFIX}View model at {self.model_url} 🚀")
@@ -199,15 +238,19 @@ class HUBTrainingSession:
         Raises:
             HUBModelError: If the identifier format is not recognized.
         """
+        # 初始化返回值
         api_key, model_id, filename = None, None, None
+        # 如果标识符是本地文件（.pt 或 .yaml）
         if identifier.endswith((".pt", ".yaml")):
             filename = identifier
+        # 如果标识符是 HUB 模型 URL
         elif identifier.startswith(f"{HUB_WEB_ROOT}/models/"):
-            parsed_url = urlparse(identifier)
-            model_id = Path(parsed_url.path).stem  # handle possible final backslash robustly
-            query_params = parse_qs(parsed_url.query)  # dictionary, i.e. {"api_key": ["API_KEY_HERE"]}
-            api_key = query_params.get("api_key", [None])[0]
+            parsed_url = urlparse(identifier)  # 解析 URL
+            model_id = Path(parsed_url.path).stem  # 提取模型 ID（处理可能的尾部斜杠）
+            query_params = parse_qs(parsed_url.query)  # 解析查询参数，如 {"api_key": ["API_KEY_HERE"]}
+            api_key = query_params.get("api_key", [None])[0]  # 提取 API 密钥
         else:
+            # 无法识别的标识符格式
             raise HUBModelError(f"model='{identifier} invalid, correct format is {HUB_WEB_ROOT}/models/MODEL_ID")
         return api_key, model_id, filename
 
@@ -223,24 +266,25 @@ class HUBTrainingSession:
                 issues with the provided training arguments.
         """
         if self.model.is_resumable():
-            # Model has saved weights
+            # 模型有已保存的权重，支持断点续训
             self.train_args = {"data": self.model.get_dataset_url(), "resume": True}
-            self.model_file = self.model.get_weights_url("last")
+            self.model_file = self.model.get_weights_url("last")  # 获取最后一次保存的权重
         else:
-            # Model has no saved weights
-            self.train_args = self.model.data.get("train_args")  # new response
+            # 模型没有保存的权重
+            self.train_args = self.model.data.get("train_args")  # 获取训练参数（新响应格式）
 
-            # Set the model file as either a *.pt or *.yaml file
+            # 设置模型文件：预训练模型使用父模型权重，否则使用架构配置文件
             self.model_file = (
                 self.model.get_weights_url("parent") if self.model.is_pretrained() else self.model.get_architecture()
             )
 
         if "data" not in self.train_args:
-            # RF bug - datasets are sometimes not exported
+            # RF bug - 数据集有时未导出
             raise ValueError("Dataset may still be processing. Please wait a minute and try again.")
 
-        self.model_file = checks.check_yolov5u_filename(self.model_file, verbose=False)  # YOLOv5->YOLOv5u
-        self.model_id = self.model.id
+        # 检查并转换 YOLOv5 文件名为 YOLOv5u（如果需要）
+        self.model_file = checks.check_yolov5u_filename(self.model_file, verbose=False)
+        self.model_id = self.model.id  # 保存模型 ID
 
     def request_queue(
         self,
@@ -360,6 +404,7 @@ class HUBTrainingSession:
 
     def upload_metrics(self):
         """Upload model metrics to Ultralytics HUB."""
+        # 在新线程中上传指标队列的副本
         return self.request_queue(self.model.upload_metrics, metrics=self.metrics_queue.copy(), thread=True)
 
     def upload_model(
@@ -381,31 +426,35 @@ class HUBTrainingSession:
         """
         weights = Path(weights)
         if not weights.is_file():
+            # 权重文件不存在
             last = weights.with_name(f"last{weights.suffix}")
             if final and last.is_file():
+                # 如果是最终上传且 best.pt 不存在，但 last.pt 存在
+                # 这种情况通常发生在 Google Colab 等临时环境中断点续训时
                 LOGGER.warning(
                     f"{PREFIX} Model 'best.pt' not found, copying 'last.pt' to 'best.pt' and uploading. "
                     "This often happens when resuming training in transient environments like Google Colab. "
                     "For more reliable training, consider using Ultralytics HUB Cloud. "
                     "Learn more at https://docs.ultralytics.com/hub/cloud-training."
                 )
-                shutil.copy(last, weights)  # copy last.pt to best.pt
+                shutil.copy(last, weights)  # 复制 last.pt 为 best.pt
             else:
                 LOGGER.warning(f"{PREFIX} Model upload issue. Missing model {weights}.")
                 return
 
+        # 上传模型到 HUB
         self.request_queue(
             self.model.upload_model,
-            epoch=epoch,
-            weights=str(weights),
-            is_best=is_best,
-            map=map,
-            final=final,
-            retry=10,
-            timeout=3600,
-            thread=not final,
-            progress_total=weights.stat().st_size if final else None,  # only show progress if final
-            stream_response=True,
+            epoch=epoch,  # 当前 epoch
+            weights=str(weights),  # 权重文件路径
+            is_best=is_best,  # 是否为最佳模型
+            map=map,  # 平均精度
+            final=final,  # 是否为最终模型
+            retry=10,  # 重试次数
+            timeout=3600,  # 超时时间（秒）
+            thread=not final,  # 非最终模型在后台线程上传
+            progress_total=weights.stat().st_size if final else None,  # 仅最终模型显示进度
+            stream_response=True,  # 流式响应
         )
 
     @staticmethod

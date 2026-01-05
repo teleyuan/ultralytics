@@ -1,5 +1,3 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 from __future__ import annotations
 
 from typing import Any
@@ -15,23 +13,22 @@ from .ops import HungarianMatcher
 
 
 class DETRLoss(nn.Module):
-    """DETR (DEtection TRansformer) Loss class for calculating various loss components.
+    """DETR（DEtection TRansformer）损失类，用于计算各种损失组件。
 
-    This class computes classification loss, bounding box loss, GIoU loss, and optionally auxiliary losses for the DETR
-    object detection model.
+    该类为 DETR 目标检测模型计算分类损失、边界框损失、GIoU 损失以及可选的辅助损失。
 
-    Attributes:
-        nc (int): Number of classes.
-        loss_gain (dict[str, float]): Coefficients for different loss components.
-        aux_loss (bool): Whether to compute auxiliary losses.
-        use_fl (bool): Whether to use FocalLoss.
-        use_vfl (bool): Whether to use VarifocalLoss.
-        use_uni_match (bool): Whether to use a fixed layer for auxiliary branch label assignment.
-        uni_match_ind (int): Index of fixed layer to use if use_uni_match is True.
-        matcher (HungarianMatcher): Object to compute matching cost and indices.
-        fl (FocalLoss | None): Focal Loss object if use_fl is True, otherwise None.
-        vfl (VarifocalLoss | None): Varifocal Loss object if use_vfl is True, otherwise None.
-        device (torch.device): Device on which tensors are stored.
+    属性:
+        nc (int): 类别数量。
+        loss_gain (dict[str, float]): 不同损失组件的系数。
+        aux_loss (bool): 是否计算辅助损失。
+        use_fl (bool): 是否使用 FocalLoss。
+        use_vfl (bool): 是否使用 VarifocalLoss。
+        use_uni_match (bool): 是否为辅助分支标签分配使用固定层。
+        uni_match_ind (int): 如果 use_uni_match 为 True，要使用的固定层索引。
+        matcher (HungarianMatcher): 用于计算匹配成本和索引的对象。
+        fl (FocalLoss | None): 如果 use_fl 为 True，则为 Focal Loss 对象，否则为 None。
+        vfl (VarifocalLoss | None): 如果 use_vfl 为 True，则为 Varifocal Loss 对象，否则为 None。
+        device (torch.device): 张量存储的设备。
     """
 
     def __init__(
@@ -46,21 +43,21 @@ class DETRLoss(nn.Module):
         gamma: float = 1.5,
         alpha: float = 0.25,
     ):
-        """Initialize DETR loss function with customizable components and gains.
+        """使用可自定义的组件和增益初始化 DETR 损失函数。
 
-        Uses default loss_gain if not provided. Initializes HungarianMatcher with preset cost gains. Supports auxiliary
-        losses and various loss types.
+        如果未提供，则使用默认的 loss_gain。使用预设的成本增益初始化 HungarianMatcher。
+        支持辅助损失和各种损失类型。
 
-        Args:
-            nc (int): Number of classes.
-            loss_gain (dict[str, float], optional): Coefficients for different loss components.
-            aux_loss (bool): Whether to use auxiliary losses from each decoder layer.
-            use_fl (bool): Whether to use FocalLoss.
-            use_vfl (bool): Whether to use VarifocalLoss.
-            use_uni_match (bool): Whether to use fixed layer for auxiliary branch label assignment.
-            uni_match_ind (int): Index of fixed layer for uni_match.
-            gamma (float): The focusing parameter that controls how much the loss focuses on hard-to-classify examples.
-            alpha (float): The balancing factor used to address class imbalance.
+        参数:
+            nc (int): 类别数量。
+            loss_gain (dict[str, float], optional): 不同损失组件的系数。
+            aux_loss (bool): 是否使用来自每个解码器层的辅助损失。
+            use_fl (bool): 是否使用 FocalLoss。
+            use_vfl (bool): 是否使用 VarifocalLoss。
+            use_uni_match (bool): 是否为辅助分支标签分配使用固定层。
+            uni_match_ind (int): uni_match 的固定层索引。
+            gamma (float): 聚焦参数，控制损失在难分类样本上的聚焦程度。
+            alpha (float): 用于解决类别不平衡的平衡因子。
         """
         super().__init__()
 
@@ -80,23 +77,23 @@ class DETRLoss(nn.Module):
     def _get_loss_class(
         self, pred_scores: torch.Tensor, targets: torch.Tensor, gt_scores: torch.Tensor, num_gts: int, postfix: str = ""
     ) -> dict[str, torch.Tensor]:
-        """Compute classification loss based on predictions, target values, and ground truth scores.
+        """基于预测值、目标值和真实分数计算分类损失。
 
-        Args:
-            pred_scores (torch.Tensor): Predicted class scores with shape (B, N, C).
-            targets (torch.Tensor): Target class indices with shape (B, N).
-            gt_scores (torch.Tensor): Ground truth confidence scores with shape (B, N).
-            num_gts (int): Number of ground truth objects.
-            postfix (str, optional): String to append to the loss name for identification in multi-loss scenarios.
+        参数:
+            pred_scores (torch.Tensor): 预测的类别分数，形状为 (B, N, C)。
+            targets (torch.Tensor): 目标类别索引，形状为 (B, N)。
+            gt_scores (torch.Tensor): 真实置信度分数，形状为 (B, N)。
+            num_gts (int): 真实对象的数量。
+            postfix (str, optional): 在多损失场景中附加到损失名称以进行标识的字符串。
 
-        Returns:
-            (dict[str, torch.Tensor]): Dictionary containing classification loss value.
+        返回:
+            (dict[str, torch.Tensor]): 包含分类损失值的字典。
 
-        Notes:
-            The function supports different classification loss types:
-            - Varifocal Loss (if self.vfl is True and num_gts > 0)
-            - Focal Loss (if self.fl is True)
-            - BCE Loss (default fallback)
+        注意:
+            该函数支持不同的分类损失类型:
+            - Varifocal Loss（如果 self.vfl 为 True 且 num_gts > 0）
+            - Focal Loss（如果 self.fl 为 True）
+            - BCE Loss（默认回退）
         """
         # Logits: [b, query, num_classes], gt_class: list[[n, 1]]
         name_class = f"loss_class{postfix}"
@@ -114,27 +111,27 @@ class DETRLoss(nn.Module):
                 loss_cls = self.fl(pred_scores, one_hot.float())
             loss_cls /= max(num_gts, 1) / nq
         else:
-            loss_cls = nn.BCEWithLogitsLoss(reduction="none")(pred_scores, gt_scores).mean(1).sum()  # YOLO CLS loss
+            loss_cls = nn.BCEWithLogitsLoss(reduction="none")(pred_scores, gt_scores).mean(1).sum()  # YOLO 分类损失
 
         return {name_class: loss_cls.squeeze() * self.loss_gain["class"]}
 
     def _get_loss_bbox(
         self, pred_bboxes: torch.Tensor, gt_bboxes: torch.Tensor, postfix: str = ""
     ) -> dict[str, torch.Tensor]:
-        """Compute bounding box and GIoU losses for predicted and ground truth bounding boxes.
+        """计算预测边界框和真实边界框的边界框损失和 GIoU 损失。
 
-        Args:
-            pred_bboxes (torch.Tensor): Predicted bounding boxes with shape (N, 4).
-            gt_bboxes (torch.Tensor): Ground truth bounding boxes with shape (N, 4).
-            postfix (str, optional): String to append to the loss names for identification in multi-loss scenarios.
+        参数:
+            pred_bboxes (torch.Tensor): 预测的边界框，形状为 (N, 4)。
+            gt_bboxes (torch.Tensor): 真实边界框，形状为 (N, 4)。
+            postfix (str, optional): 在多损失场景中附加到损失名称以进行标识的字符串。
 
-        Returns:
-            (dict[str, torch.Tensor]): Dictionary containing:
-                - loss_bbox{postfix}: L1 loss between predicted and ground truth boxes, scaled by the bbox loss gain.
-                - loss_giou{postfix}: GIoU loss between predicted and ground truth boxes, scaled by the giou loss gain.
+        返回:
+            (dict[str, torch.Tensor]): 包含以下内容的字典:
+                - loss_bbox{postfix}: 预测框和真实框之间的 L1 损失，按 bbox 损失增益缩放。
+                - loss_giou{postfix}: 预测框和真实框之间的 GIoU 损失，按 giou 损失增益缩放。
 
-        Notes:
-            If no ground truth boxes are provided (empty list), zero-valued tensors are returned for both losses.
+        注意:
+            如果未提供真实边界框（空列表），则两个损失都返回零值张量。
         """
         # Boxes: [b, query, 4], gt_bbox: list[[n, 4]]
         name_bbox = f"loss_bbox{postfix}"
@@ -152,7 +149,7 @@ class DETRLoss(nn.Module):
         loss[name_giou] = self.loss_gain["giou"] * loss[name_giou]
         return {k: v.squeeze() for k, v in loss.items()}
 
-    # This function is for future RT-DETR Segment models
+    # 此函数用于未来的 RT-DETR 分割模型
     # def _get_loss_mask(self, masks, gt_mask, match_indices, postfix=''):
     #     # masks: [b, query, h, w], gt_mask: list[[n, H, W]]
     #     name_mask = f'loss_mask{postfix}'
@@ -173,7 +170,7 @@ class DETRLoss(nn.Module):
     #     loss[name_dice] = self.loss_gain['dice'] * self._dice_loss(src_masks, target_masks, num_gts)
     #     return loss
 
-    # This function is for future RT-DETR Segment models
+    # 此函数用于未来的 RT-DETR 分割模型
     # @staticmethod
     # def _dice_loss(inputs, targets, num_gts):
     #     inputs = F.sigmoid(inputs).flatten(1)
@@ -195,23 +192,23 @@ class DETRLoss(nn.Module):
         masks: torch.Tensor | None = None,
         gt_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Get auxiliary losses for intermediate decoder layers.
+        """获取中间解码器层的辅助损失。
 
-        Args:
-            pred_bboxes (torch.Tensor): Predicted bounding boxes from auxiliary layers.
-            pred_scores (torch.Tensor): Predicted scores from auxiliary layers.
-            gt_bboxes (torch.Tensor): Ground truth bounding boxes.
-            gt_cls (torch.Tensor): Ground truth classes.
-            gt_groups (list[int]): Number of ground truths per image.
-            match_indices (list[tuple], optional): Pre-computed matching indices.
-            postfix (str, optional): String to append to loss names.
-            masks (torch.Tensor, optional): Predicted masks if using segmentation.
-            gt_mask (torch.Tensor, optional): Ground truth masks if using segmentation.
+        参数:
+            pred_bboxes (torch.Tensor): 来自辅助层的预测边界框。
+            pred_scores (torch.Tensor): 来自辅助层的预测分数。
+            gt_bboxes (torch.Tensor): 真实边界框。
+            gt_cls (torch.Tensor): 真实类别。
+            gt_groups (list[int]): 每张图像的真实对象数量。
+            match_indices (list[tuple], optional): 预计算的匹配索引。
+            postfix (str, optional): 附加到损失名称的字符串。
+            masks (torch.Tensor, optional): 如果使用分割，则为预测掩码。
+            gt_mask (torch.Tensor, optional): 如果使用分割，则为真实掩码。
 
-        Returns:
-            (dict[str, torch.Tensor]): Dictionary of auxiliary losses.
+        返回:
+            (dict[str, torch.Tensor]): 辅助损失字典。
         """
-        # NOTE: loss class, bbox, giou, mask, dice
+        # 注意: 损失包括 class, bbox, giou, mask, dice
         loss = torch.zeros(5 if masks is not None else 3, device=pred_bboxes.device)
         if match_indices is None and self.use_uni_match:
             match_indices = self.matcher(
@@ -256,14 +253,14 @@ class DETRLoss(nn.Module):
 
     @staticmethod
     def _get_index(match_indices: list[tuple]) -> tuple[tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        """Extract batch indices, source indices, and destination indices from match indices.
+        """从匹配索引中提取批次索引、源索引和目标索引。
 
-        Args:
-            match_indices (list[tuple]): List of tuples containing matched indices.
+        参数:
+            match_indices (list[tuple]): 包含匹配索引的元组列表。
 
-        Returns:
-            batch_idx (tuple[torch.Tensor, torch.Tensor]): Tuple containing (batch_idx, src_idx).
-            dst_idx (torch.Tensor): Destination indices.
+        返回:
+            batch_idx (tuple[torch.Tensor, torch.Tensor]): 包含 (batch_idx, src_idx) 的元组。
+            dst_idx (torch.Tensor): 目标索引。
         """
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(match_indices)])
         src_idx = torch.cat([src for (src, _) in match_indices])
@@ -273,16 +270,16 @@ class DETRLoss(nn.Module):
     def _get_assigned_bboxes(
         self, pred_bboxes: torch.Tensor, gt_bboxes: torch.Tensor, match_indices: list[tuple]
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Assign predicted bounding boxes to ground truth bounding boxes based on match indices.
+        """根据匹配索引将预测边界框分配给真实边界框。
 
-        Args:
-            pred_bboxes (torch.Tensor): Predicted bounding boxes.
-            gt_bboxes (torch.Tensor): Ground truth bounding boxes.
-            match_indices (list[tuple]): List of tuples containing matched indices.
+        参数:
+            pred_bboxes (torch.Tensor): 预测的边界框。
+            gt_bboxes (torch.Tensor): 真实边界框。
+            match_indices (list[tuple]): 包含匹配索引的元组列表。
 
-        Returns:
-            pred_assigned (torch.Tensor): Assigned predicted bounding boxes.
-            gt_assigned (torch.Tensor): Assigned ground truth bounding boxes.
+        返回:
+            pred_assigned (torch.Tensor): 分配的预测边界框。
+            gt_assigned (torch.Tensor): 分配的真实边界框。
         """
         pred_assigned = torch.cat(
             [
@@ -310,21 +307,21 @@ class DETRLoss(nn.Module):
         postfix: str = "",
         match_indices: list[tuple] | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Calculate losses for a single prediction layer.
+        """计算单个预测层的损失。
 
-        Args:
-            pred_bboxes (torch.Tensor): Predicted bounding boxes.
-            pred_scores (torch.Tensor): Predicted class scores.
-            gt_bboxes (torch.Tensor): Ground truth bounding boxes.
-            gt_cls (torch.Tensor): Ground truth classes.
-            gt_groups (list[int]): Number of ground truths per image.
-            masks (torch.Tensor, optional): Predicted masks if using segmentation.
-            gt_mask (torch.Tensor, optional): Ground truth masks if using segmentation.
-            postfix (str, optional): String to append to loss names.
-            match_indices (list[tuple], optional): Pre-computed matching indices.
+        参数:
+            pred_bboxes (torch.Tensor): 预测的边界框。
+            pred_scores (torch.Tensor): 预测的类别分数。
+            gt_bboxes (torch.Tensor): 真实边界框。
+            gt_cls (torch.Tensor): 真实类别。
+            gt_groups (list[int]): 每张图像的真实对象数量。
+            masks (torch.Tensor, optional): 如果使用分割，则为预测掩码。
+            gt_mask (torch.Tensor, optional): 如果使用分割，则为真实掩码。
+            postfix (str, optional): 附加到损失名称的字符串。
+            match_indices (list[tuple], optional): 预计算的匹配索引。
 
-        Returns:
-            (dict[str, torch.Tensor]): Dictionary of losses.
+        返回:
+            (dict[str, torch.Tensor]): 损失字典。
         """
         if match_indices is None:
             match_indices = self.matcher(
@@ -356,21 +353,21 @@ class DETRLoss(nn.Module):
         postfix: str = "",
         **kwargs: Any,
     ) -> dict[str, torch.Tensor]:
-        """Calculate loss for predicted bounding boxes and scores.
+        """计算预测边界框和分数的损失。
 
-        Args:
-            pred_bboxes (torch.Tensor): Predicted bounding boxes, shape (L, B, N, 4).
-            pred_scores (torch.Tensor): Predicted class scores, shape (L, B, N, C).
-            batch (dict[str, Any]): Batch information containing cls, bboxes, and gt_groups.
-            postfix (str, optional): Postfix for loss names.
-            **kwargs (Any): Additional arguments, may include 'match_indices'.
+        参数:
+            pred_bboxes (torch.Tensor): 预测的边界框，形状为 (L, B, N, 4)。
+            pred_scores (torch.Tensor): 预测的类别分数，形状为 (L, B, N, C)。
+            batch (dict[str, Any]): 包含 cls、bboxes 和 gt_groups 的批次信息。
+            postfix (str, optional): 损失名称的后缀。
+            **kwargs (Any): 额外参数，可能包括 'match_indices'。
 
-        Returns:
-            (dict[str, torch.Tensor]): Computed losses, including main and auxiliary (if enabled).
+        返回:
+            (dict[str, torch.Tensor]): 计算的损失，包括主损失和辅助损失（如果启用）。
 
-        Notes:
-            Uses last elements of pred_bboxes and pred_scores for main loss, and the rest for auxiliary losses if
-            self.aux_loss is True.
+        注意:
+            使用 pred_bboxes 和 pred_scores 的最后一个元素计算主损失，
+            如果 self.aux_loss 为 True，则使用其余元素计算辅助损失。
         """
         self.device = pred_bboxes.device
         match_indices = kwargs.get("match_indices", None)
@@ -391,10 +388,10 @@ class DETRLoss(nn.Module):
 
 
 class RTDETRDetectionLoss(DETRLoss):
-    """Real-Time DeepTracker (RT-DETR) Detection Loss class that extends the DETRLoss.
+    """实时 DeepTracker（RT-DETR）检测损失类，扩展 DETRLoss。
 
-    This class computes the detection loss for the RT-DETR model, which includes the standard detection loss as well as
-    an additional denoising training loss when provided with denoising metadata.
+    该类计算 RT-DETR 模型的检测损失，包括标准检测损失以及
+    在提供去噪元数据时的额外去噪训练损失。
     """
 
     def forward(
@@ -405,34 +402,34 @@ class RTDETRDetectionLoss(DETRLoss):
         dn_scores: torch.Tensor | None = None,
         dn_meta: dict[str, Any] | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Forward pass to compute detection loss with optional denoising loss.
+        """前向传播，计算带有可选去噪损失的检测损失。
 
-        Args:
-            preds (tuple[torch.Tensor, torch.Tensor]): Tuple containing predicted bounding boxes and scores.
-            batch (dict[str, Any]): Batch data containing ground truth information.
-            dn_bboxes (torch.Tensor, optional): Denoising bounding boxes.
-            dn_scores (torch.Tensor, optional): Denoising scores.
-            dn_meta (dict[str, Any], optional): Metadata for denoising.
+        参数:
+            preds (tuple[torch.Tensor, torch.Tensor]): 包含预测边界框和分数的元组。
+            batch (dict[str, Any]): 包含真实信息的批次数据。
+            dn_bboxes (torch.Tensor, optional): 去噪边界框。
+            dn_scores (torch.Tensor, optional): 去噪分数。
+            dn_meta (dict[str, Any], optional): 去噪的元数据。
 
-        Returns:
-            (dict[str, torch.Tensor]): Dictionary containing total loss and denoising loss if applicable.
+        返回:
+            (dict[str, torch.Tensor]): 包含总损失和去噪损失（如果适用）的字典。
         """
         pred_bboxes, pred_scores = preds
         total_loss = super().forward(pred_bboxes, pred_scores, batch)
 
-        # Check for denoising metadata to compute denoising training loss
+        # 检查去噪元数据以计算去噪训练损失
         if dn_meta is not None:
             dn_pos_idx, dn_num_group = dn_meta["dn_pos_idx"], dn_meta["dn_num_group"]
             assert len(batch["gt_groups"]) == len(dn_pos_idx)
 
-            # Get the match indices for denoising
+            # 获取去噪的匹配索引
             match_indices = self.get_dn_match_indices(dn_pos_idx, dn_num_group, batch["gt_groups"])
 
-            # Compute the denoising training loss
+            # 计算去噪训练损失
             dn_loss = super().forward(dn_bboxes, dn_scores, batch, postfix="_dn", match_indices=match_indices)
             total_loss.update(dn_loss)
         else:
-            # If no denoising metadata is provided, set denoising loss to zero
+            # 如果未提供去噪元数据，则将去噪损失设置为零
             total_loss.update({f"{k}_dn": torch.tensor(0.0, device=self.device) for k in total_loss.keys()})
 
         return total_loss
@@ -441,15 +438,15 @@ class RTDETRDetectionLoss(DETRLoss):
     def get_dn_match_indices(
         dn_pos_idx: list[torch.Tensor], dn_num_group: int, gt_groups: list[int]
     ) -> list[tuple[torch.Tensor, torch.Tensor]]:
-        """Get match indices for denoising.
+        """获取去噪的匹配索引。
 
-        Args:
-            dn_pos_idx (list[torch.Tensor]): List of tensors containing positive indices for denoising.
-            dn_num_group (int): Number of denoising groups.
-            gt_groups (list[int]): List of integers representing number of ground truths per image.
+        参数:
+            dn_pos_idx (list[torch.Tensor]): 包含去噪正样本索引的张量列表。
+            dn_num_group (int): 去噪组的数量。
+            gt_groups (list[int]): 表示每张图像真实对象数量的整数列表。
 
-        Returns:
-            (list[tuple[torch.Tensor, torch.Tensor]]): List of tuples containing matched indices for denoising.
+        返回:
+            (list[tuple[torch.Tensor, torch.Tensor]]): 包含去噪匹配索引的元组列表。
         """
         dn_match_indices = []
         idx_groups = torch.as_tensor([0, *gt_groups[:-1]]).cumsum_(0)
