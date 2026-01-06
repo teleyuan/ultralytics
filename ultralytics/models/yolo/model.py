@@ -46,54 +46,45 @@ from ultralytics.utils import ROOT, YAML  # 工具函数和常量
 
 
 class YOLO(Model):
-    """YOLO (You Only Look Once) object detection model.
+    """YOLO (You Only Look Once) 目标检测模型
 
-    This class provides a unified interface for YOLO models, automatically switching to specialized model types
-    (YOLOWorld or YOLOE) based on the model filename. It supports various computer vision tasks including object
-    detection, segmentation, classification, pose estimation, and oriented bounding box detection.
+    该类为 YOLO 模型提供统一接口，根据模型文件名自动切换到专门的模型类型
+    （YOLOWorld 或 YOLOE）。支持多种计算机视觉任务，包括目标检测、实例分割、
+    图像分类、姿态估计和有向边界框检测。
 
-    Attributes:
-        model: The loaded YOLO model instance.
-        task: The task type (detect, segment, classify, pose, obb).
-        overrides: Configuration overrides for the model.
+    属性:
+        model: 已加载的 YOLO 模型实例
+        task: 任务类型（detect、segment、classify、pose、obb）
+        overrides: 模型的配置覆盖参数
 
-    Methods:
-        __init__: Initialize a YOLO model with automatic type detection.
-        task_map: Map tasks to their corresponding model, trainer, validator, and predictor classes.
+    方法:
+        __init__: 初始化 YOLO 模型，支持自动类型检测
+        task_map: 将任务映射到对应的模型、训练器、验证器和预测器类
 
-    Examples:
-        Load a pretrained YOLO11n detection model
+    示例:
+        加载预训练的 YOLO11n 检测模型
         >>> model = YOLO("yolo11n.pt")
 
-        Load a pretrained YOLO11n segmentation model
+        加载预训练的 YOLO11n 分割模型
         >>> model = YOLO("yolo11n-seg.pt")
 
-        Initialize from a YAML configuration
+        从 YAML 配置初始化
         >>> model = YOLO("yolo11n.yaml")
     """
 
     def __init__(self, model: str | Path = "yolo11n.pt", task: str | None = None, verbose: bool = False):
-        """Initialize a YOLO model.
-
-        This constructor initializes a YOLO model, automatically switching to specialized model types (YOLOWorld or
-        YOLOE) based on the model filename.
-
-        初始化 YOLO 模型
+        """初始化 YOLO 模型
 
         该构造函数会根据模型文件名自动选择合适的模型类型:
             - 文件名包含 "-world": 切换为 YOLOWorld 开放词汇检测模型
             - 文件名包含 "yoloe": 切换为 YOLOE 增强型模型
             - 其他: 使用标准 YOLO 模型
 
-        Args:
-            model (str | Path): Model name or path to model file, i.e. 'yolo11n.pt', 'yolo11n.yaml'.
-                模型名称或模型文件路径,例如 'yolo11n.pt' (预训练权重) 或 'yolo11n.yaml' (模型配置)
-            task (str, optional): YOLO task specification, i.e. 'detect', 'segment', 'classify', 'pose', 'obb'. Defaults
-                to auto-detection based on model.
-                任务类型,'detect'(检测)/'segment'(分割)/'classify'(分类)/'pose'(姿态)/'obb'(有向框)
+        参数:
+            model (str | Path): 模型名称或模型文件路径,例如 'yolo11n.pt' (预训练权重) 或 'yolo11n.yaml' (模型配置)
+            task (str, optional): 任务类型,'detect'(检测)/'segment'(分割)/'classify'(分类)/'pose'(姿态)/'obb'(有向框)
                 默认根据模型自动检测
-            verbose (bool): Display model info on load.
-                是否在加载时显示模型信息
+            verbose (bool): 是否在加载时显示模型信息
         """
         # 将模型路径转换为 Path 对象
         path = Path(model if isinstance(model, (str, Path)) else "")
@@ -123,14 +114,12 @@ class YOLO(Model):
 
     @property
     def task_map(self) -> dict[str, dict[str, Any]]:
-        """Map head to model, trainer, validator, and predictor classes.
-
-        任务映射字典
+        """任务映射字典
 
         将任务类型映射到对应的模型、训练器、验证器和预测器类。
         该映射表用于根据任务类型自动选择合适的组件。
 
-        Returns:
+        返回:
             dict: 任务映射字典,包含以下任务:
                 - classify: 图像分类任务
                 - detect: 目标检测任务
@@ -173,45 +162,37 @@ class YOLO(Model):
 
 
 class YOLOWorld(Model):
-    """YOLO-World object detection model.
+    """YOLO-World 开放词汇目标检测模型
 
-    YOLO-World is an open-vocabulary object detection model that can detect objects based on text descriptions without
-    requiring training on specific classes. It extends the YOLO architecture to support real-time open-vocabulary
-    detection.
+    YOLO-World 是一个开放词汇目标检测模型，可以基于文本描述检测任意类别的目标，
+    无需针对特定类别进行训练。它扩展了 YOLO 架构以支持实时开放词汇检测。
 
-    Attributes:
-        model: The loaded YOLO-World model instance.
-        task: Always set to 'detect' for object detection.
-        overrides: Configuration overrides for the model.
+    属性:
+        model: 已加载的 YOLO-World 模型实例
+        task: 始终设置为 'detect' 用于目标检测
+        overrides: 模型的配置覆盖参数
 
-    Methods:
-        __init__: Initialize YOLOv8-World model with a pre-trained model file.
-        task_map: Map tasks to their corresponding model, trainer, validator, and predictor classes.
-        set_classes: Set the model's class names for detection.
+    方法:
+        __init__: 使用预训练模型文件初始化 YOLOv8-World 模型
+        task_map: 将任务映射到对应的模型、训练器、验证器和预测器类
+        set_classes: 设置模型的检测类别名称
 
-    Examples:
-        Load a YOLOv8-World model
+    示例:
+        加载 YOLOv8-World 模型
         >>> model = YOLOWorld("yolov8s-world.pt")
 
-        Set custom classes for detection
+        设置自定义检测类别
         >>> model.set_classes(["person", "car", "bicycle"])
     """
 
     def __init__(self, model: str | Path = "yolov8s-world.pt", verbose: bool = False) -> None:
-        """Initialize YOLOv8-World model with a pre-trained model file.
-
-        Loads a YOLOv8-World model for object detection. If no custom class names are provided, it assigns default COCO
-        class names.
-
-        初始化 YOLOv8-World 模型
+        """初始化 YOLOv8-World 模型
 
         加载一个开放词汇目标检测模型。如果没有提供自定义类别名称,则使用默认的 COCO 类别名称。
 
-        Args:
-            model (str | Path): Path to the pre-trained model file. Supports *.pt and *.yaml formats.
-                预训练模型文件路径,支持 *.pt (权重) 和 *.yaml (配置) 格式
-            verbose (bool): If True, prints additional information during initialization.
-                是否在初始化时打印详细信息
+        参数:
+            model (str | Path): 预训练模型文件路径,支持 *.pt (权重) 和 *.yaml (配置) 格式
+            verbose (bool): 是否在初始化时打印详细信息
         """
         # 调用父类初始化,固定任务类型为 "detect"
         super().__init__(model=model, task="detect", verbose=verbose)
@@ -222,13 +203,11 @@ class YOLOWorld(Model):
 
     @property
     def task_map(self) -> dict[str, dict[str, Any]]:
-        """Map head to model, validator, and predictor classes.
-
-        任务映射字典
+        """任务映射字典
 
         YOLOWorld 仅支持目标检测任务,使用专门的 WorldModel 和 WorldTrainer。
 
-        Returns:
+        返回:
             dict: 任务映射字典,仅包含 detect 任务
         """
         return {
@@ -241,16 +220,13 @@ class YOLOWorld(Model):
         }
 
     def set_classes(self, classes: list[str]) -> None:
-        """Set the model's class names for detection.
-
-        设置模型的检测类别名称
+        """设置模型的检测类别名称
 
         为 YOLOWorld 模型动态设置检测类别,支持开放词汇检测。
         模型会根据提供的类别名称生成对应的文本嵌入。
 
-        Args:
-            classes (list[str]): A list of categories i.e. ["person"].
-                类别名称列表,例如 ["person", "car", "dog"]
+        参数:
+            classes (list[str]): 类别名称列表,例如 ["person", "car", "dog"]
         """
         # 调用模型的 set_classes 方法设置类别 (会生成文本嵌入)
         self.model.set_classes(classes)
@@ -267,66 +243,59 @@ class YOLOWorld(Model):
 
 
 class YOLOE(Model):
-    """YOLOE object detection and segmentation model.
+    """YOLOE 目标检测和实例分割模型
 
-    YOLOE is an enhanced YOLO model that supports both object detection and instance segmentation tasks with improved
-    performance and additional features like visual and text positional embeddings.
+    YOLOE 是一个增强型 YOLO 模型，同时支持目标检测和实例分割任务，
+    具有改进的性能和额外的功能，如视觉位置编码和文本位置编码。
 
-    Attributes:
-        model: The loaded YOLOE model instance.
-        task: The task type (detect or segment).
-        overrides: Configuration overrides for the model.
+    属性:
+        model: 已加载的 YOLOE 模型实例
+        task: 任务类型（detect 或 segment）
+        overrides: 模型的配置覆盖参数
 
-    Methods:
-        __init__: Initialize YOLOE model with a pre-trained model file.
-        task_map: Map tasks to their corresponding model, trainer, validator, and predictor classes.
-        get_text_pe: Get text positional embeddings for the given texts.
-        get_visual_pe: Get visual positional embeddings for the given image and visual features.
-        set_vocab: Set vocabulary and class names for the YOLOE model.
-        get_vocab: Get vocabulary for the given class names.
-        set_classes: Set the model's class names and embeddings for detection.
-        val: Validate the model using text or visual prompts.
-        predict: Run prediction on images, videos, directories, streams, etc.
+    方法:
+        __init__: 使用预训练模型文件初始化 YOLOE 模型
+        task_map: 将任务映射到对应的模型、训练器、验证器和预测器类
+        get_text_pe: 获取给定文本的文本位置编码
+        get_visual_pe: 获取给定图像和视觉特征的视觉位置编码
+        set_vocab: 为 YOLOE 模型设置词汇表和类别名称
+        get_vocab: 获取给定类别名称的词汇表
+        set_classes: 设置模型的类别名称和嵌入向量
+        val: 使用文本或视觉提示验证模型
+        predict: 对图像、视频、目录、流等进行预测
 
-    Examples:
-        Load a YOLOE detection model
+    示例:
+        加载 YOLOE 检测模型
         >>> model = YOLOE("yoloe-11s-seg.pt")
 
-        Set vocabulary and class names
+        设置词汇表和类别名称
         >>> model.set_vocab(["person", "car", "dog"], ["person", "car", "dog"])
 
-        Predict with visual prompts
+        使用视觉提示进行预测
         >>> prompts = {"bboxes": [[10, 20, 100, 200]], "cls": ["person"]}
         >>> results = model.predict("image.jpg", visual_prompts=prompts)
     """
 
     def __init__(self, model: str | Path = "yoloe-11s-seg.pt", task: str | None = None, verbose: bool = False) -> None:
-        """Initialize YOLOE model with a pre-trained model file.
-
-        初始化 YOLOE 模型
+        """初始化 YOLOE 模型
 
         加载一个增强型 YOLO 模型,支持视觉提示和文本提示的检测与分割。
 
-        Args:
-            model (str | Path): Path to the pre-trained model file. Supports *.pt and *.yaml formats.
-                预训练模型文件路径,支持 *.pt (权重) 和 *.yaml (配置) 格式
-            task (str, optional): Task type for the model. Auto-detected if None.
-                任务类型,'detect' 或 'segment',默认自动检测
-            verbose (bool): If True, prints additional information during initialization.
-                是否在初始化时打印详细信息
+        参数:
+            model (str | Path): 预训练模型文件路径,支持 *.pt (权重) 和 *.yaml (配置) 格式
+            task (str, optional): 任务类型,'detect' 或 'segment',默认自动检测
+            verbose (bool): 是否在初始化时打印详细信息
         """
         # 调用父类初始化
         super().__init__(model=model, task=task, verbose=verbose)
 
     @property
     def task_map(self) -> dict[str, dict[str, Any]]:
-        """Map head to model, validator, and predictor classes.
-
-        任务映射字典
+        """任务映射字典
 
         YOLOE 支持检测和分割两种任务,每种任务使用专门的模型架构和组件。
 
-        Returns:
+        返回:
             dict: 任务映射字典,包含 detect 和 segment 任务
         """
         return {
@@ -345,16 +314,14 @@ class YOLOE(Model):
         }
 
     def get_text_pe(self, texts):
-        """Get text positional embeddings for the given texts.
-
-        获取文本位置编码
+        """获取文本位置编码
 
         根据输入的文本列表生成对应的文本嵌入向量,用于文本提示检测。
 
-        Args:
+        参数:
             texts (list[str]): 文本列表,例如类别名称
 
-        Returns:
+        返回:
             torch.Tensor: 文本位置编码张量
         """
         assert isinstance(self.model, YOLOEModel)
@@ -401,34 +368,28 @@ class YOLOE(Model):
         self.model.set_vocab(vocab, names=names)
 
     def get_vocab(self, names):
-        """Get vocabulary for the given class names.
-
-        获取类别名称的词汇表
+        """获取类别名称的词汇表
 
         根据提供的类别名称获取模型的词汇表映射。
 
-        Args:
+        参数:
             names (list[str]): 类别名称列表
 
-        Returns:
+        返回:
             list[str]: 词汇表列表
         """
         assert isinstance(self.model, YOLOEModel)
         return self.model.get_vocab(names)
 
     def set_classes(self, classes: list[str], embeddings: torch.Tensor | None = None) -> None:
-        """Set the model's class names and embeddings for detection.
-
-        设置模型的类别名称和嵌入向量
+        """设置模型的类别名称和嵌入向量
 
         为 YOLOE 模型设置检测类别及其对应的嵌入向量。如果未提供嵌入向量,
         会自动从类别名称生成文本嵌入。
 
-        Args:
-            classes (list[str]): A list of categories i.e. ["person"].
-                类别名称列表,例如 ["person", "car", "dog"]
-            embeddings (torch.Tensor): Embeddings corresponding to the classes.
-                与类别对应的嵌入向量,如果为 None 则自动生成
+        参数:
+            classes (list[str]): 类别名称列表,例如 ["person", "car", "dog"]
+            embeddings (torch.Tensor): 与类别对应的嵌入向量,如果为 None 则自动生成
         """
         assert isinstance(self.model, YOLOEModel)
         # 如果未提供嵌入向量,则从类别名称生成文本嵌入
@@ -452,27 +413,20 @@ class YOLOE(Model):
         refer_data: str | None = None,
         **kwargs,
     ):
-        """Validate the model using text or visual prompts.
-
-        使用文本或视觉提示验证模型
+        """使用文本或视觉提示验证模型
 
         该方法支持两种验证模式:
             - 文本提示模式 (load_vp=False): 使用文本嵌入作为类别提示
             - 视觉提示模式 (load_vp=True): 使用参考图像中的视觉特征作为提示
 
-        Args:
-            validator (callable, optional): A callable validator function. If None, a default validator is loaded.
-                验证器函数,如果为 None 则加载默认验证器
-            load_vp (bool): Whether to load visual prompts. If False, text prompts are used.
-                是否加载视觉提示,False 表示使用文本提示
-            refer_data (str, optional): Path to the reference data for visual prompts.
-                视觉提示的参考数据路径
-            **kwargs (Any): Additional keyword arguments to override default settings.
-                额外的关键字参数,用于覆盖默认设置
+        参数:
+            validator (callable, optional): 验证器函数,如果为 None 则加载默认验证器
+            load_vp (bool): 是否加载视觉提示,False 表示使用文本提示
+            refer_data (str, optional): 视觉提示的参考数据路径
+            **kwargs (Any): 额外的关键字参数,用于覆盖默认设置
 
-        Returns:
-            (dict): Validation statistics containing metrics computed during validation.
-                验证统计信息,包含验证过程中计算的各项指标
+        返回:
+            (dict): 验证统计信息,包含验证过程中计算的各项指标
         """
         # 设置方法默认参数 (视觉提示模式不使用矩形推理)
         custom = {"rect": not load_vp}  # method defaults
@@ -495,40 +449,27 @@ class YOLOE(Model):
         predictor=yolo.yoloe.YOLOEVPDetectPredictor,
         **kwargs,
     ):
-        """Run prediction on images, videos, directories, streams, etc.
-
-        使用视觉提示或文本提示进行预测
+        """使用视觉提示或文本提示进行预测
 
         该方法支持两种预测模式:
             1. 标准模式: 直接使用模型的类别进行检测
             2. 视觉提示模式: 使用参考图像中标注的目标作为检测模板
 
-        Args:
-            source (str | int | PIL.Image | np.ndarray, optional): Source for prediction. Accepts image paths, directory
-                paths, URL/YouTube streams, PIL images, numpy arrays, or webcam indices.
-                预测数据源,支持图像路径、目录、URL、PIL图像、numpy数组或摄像头索引
-            stream (bool): Whether to stream the prediction results. If True, results are yielded as a generator as they
-                are computed.
-                是否流式返回预测结果,True 表示返回生成器
-            visual_prompts (dict[str, list]): Dictionary containing visual prompts for the model. Must include 'bboxes'
-                and 'cls' keys when non-empty.
-                视觉提示字典,包含 'bboxes' (边界框列表) 和 'cls' (类别列表) 键
-            refer_image (str | PIL.Image | np.ndarray, optional): Reference image for visual prompts.
-                视觉提示的参考图像
-            predictor (callable, optional): Custom predictor function. If None, a predictor is automatically loaded
-                based on the task.
-                自定义预测器,默认使用 YOLOEVPDetectPredictor
-            **kwargs (Any): Additional keyword arguments passed to the predictor.
-                传递给预测器的额外参数
+        参数:
+            source (str | int | PIL.Image | np.ndarray, optional): 预测数据源,支持图像路径、目录、URL、PIL图像、numpy数组或摄像头索引
+            stream (bool): 是否流式返回预测结果,True 表示返回生成器
+            visual_prompts (dict[str, list]): 视觉提示字典,包含 'bboxes' (边界框列表) 和 'cls' (类别列表) 键
+            refer_image (str | PIL.Image | np.ndarray, optional): 视觉提示的参考图像
+            predictor (callable, optional): 自定义预测器,默认使用 YOLOEVPDetectPredictor
+            **kwargs (Any): 传递给预测器的额外参数
 
-        Returns:
-            (list | generator): List of Results objects or generator of Results objects if stream=True.
-                预测结果列表或生成器 (stream=True 时)
+        返回:
+            (list | generator): 预测结果列表或生成器 (stream=True 时)
 
-        Examples:
+        示例:
             >>> model = YOLOE("yoloe-11s-seg.pt")
             >>> results = model.predict("path/to/image.jpg")
-            >>> # With visual prompts
+            >>> # 使用视觉提示
             >>> prompts = {"bboxes": [[10, 20, 100, 200]], "cls": ["person"]}
             >>> results = model.predict("path/to/image.jpg", visual_prompts=prompts)
         """

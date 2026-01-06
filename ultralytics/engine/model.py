@@ -122,11 +122,11 @@ class Model(torch.nn.Module):
 
         # 初始化各个组件为 None,按需懒加载
         self.predictor = None  # 预测器对象(可复用,避免重复初始化)
-        self.model = None  # PyTorch 模型对象
+        self.model = None  # 模型结构和权重
         self.trainer = None  # 训练器对象
 
         # 模型加载相关属性
-        self.ckpt = {}  # 如果从 *.pt 文件加载,存储检查点数据
+        self.ckpt = {}  # 如果从 *.pt 文件加载,存储检查点数据，包含模型结构和权重，优化器状态等
         self.cfg = None  # 如果从 *.yaml 文件加载,存储配置
         self.ckpt_path = None  # 检查点文件路径
 
