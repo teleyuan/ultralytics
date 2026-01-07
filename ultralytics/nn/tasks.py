@@ -1390,9 +1390,8 @@ class SafeUnpickler(pickle.Unpickler):
 
 
 def torch_safe_load(weight, safe_only=False):
-    """尝试使用 torch.load() 函数加载 PyTorch 模型。如果引发 ModuleNotFoundError,它会捕获错误,
-    记录警告消息,并尝试通过 check_requirements() 函数安装缺失的模块。安装后,该函数再次尝试
-    使用 torch.load() 加载模型。
+    """
+    尝试使用 torch.load() 函数加载 PyTorch 模型，如果模型本地缺失，则在线下载。
 
     参数:
         weight (str): PyTorch 模型的文件路径
@@ -1471,7 +1470,8 @@ def torch_safe_load(weight, safe_only=False):
 
 
 def load_checkpoint(weight, device=None, inplace=True, fuse=False):
-    """加载单个模型权重
+    """
+    加载单个模型权重
 
     参数:
         weight (str | Path): 模型权重路径
@@ -1483,7 +1483,7 @@ def load_checkpoint(weight, device=None, inplace=True, fuse=False):
         model (torch.nn.Module): 加载的模型
         ckpt (dict): 模型检查点字典
     """
-    ckpt, weight = torch_safe_load(weight)  # 加载检查点
+    ckpt, weight = torch_safe_load(weight)  # 加载模型，不存在则下载
     args = {**DEFAULT_CFG_DICT, **(ckpt.get("train_args", {}))}  # 合并模型和默认参数,优先使用模型参数
     model = (ckpt.get("ema") or ckpt["model"]).float()  # FP32 模型
 
