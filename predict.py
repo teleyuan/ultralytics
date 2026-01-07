@@ -62,7 +62,8 @@ def main():
     device = auto_select_device()
     model = YOLO(model_path)
     #print(model.names)
-    print(model.info())
+    #print(model.info())
+    #print(model.model)
     model.to(device)
     model.eval()
 

@@ -1,8 +1,5 @@
 """
-YOLO 模型任务定义模块
-
-这个模块是 Ultralytics YOLO 系列模型的核心架构定义文件。
-它包含了所有 YOLO 模型的基类和特定任务的模型实现。
+YOLO 模型结构定义模块
 
 主要模型类:
     - BaseModel: 所有 YOLO 模型的抽象基类
@@ -368,9 +365,8 @@ class BaseModel(torch.nn.Module):
 
 
 class DetectionModel(BaseModel):
-    """YOLO 检测模型
-
-    此类实现 YOLO 检测架构,处理目标检测任务的模型初始化、前向传播、增强推理和损失计算。
+    """
+    YOLO 检测模型。
 
     属性:
         yaml (dict): 模型配置字典
@@ -394,8 +390,9 @@ class DetectionModel(BaseModel):
         >>> results = model.predict(image_tensor)
     """
 
-    def __init__(self, cfg="yolo11n.yaml", ch=3, nc=None, verbose=True):
-        """使用给定的配置和参数初始化 YOLO 检测模型
+    def __init__(self, cfg="yolov8s.yaml", ch=3, nc=None, verbose=True):
+        """
+        初始化 YOLO 检测模型
 
         参数:
             cfg (str | dict): 模型配置文件路径或字典
@@ -417,7 +414,9 @@ class DetectionModel(BaseModel):
         if nc and nc != self.yaml["nc"]:
             LOGGER.info(f"使用 nc={nc} 覆盖 model.yaml nc={self.yaml['nc']}")
             self.yaml["nc"] = nc  # 覆盖 YAML 值
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # 模型、保存列表
+
+        ####################### 核心！ 根据 yaml 构建模型 #######################
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)
         self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # 默认名称字典
         self.inplace = self.yaml.get("inplace", True)
         self.end2end = getattr(self.model[-1], "end2end", False)
@@ -1480,7 +1479,7 @@ def load_checkpoint(weight, device=None, inplace=True, fuse=False):
         fuse (bool): 是否融合模型
 
     返回:
-        model (torch.nn.Module): 加载的模型
+        model (torch.nn.Module): 完整的结构和权重
         ckpt (dict): 模型检查点字典
     """
     ckpt, weight = torch_safe_load(weight)  # 加载模型，不存在则下载
@@ -1508,7 +1507,8 @@ def load_checkpoint(weight, device=None, inplace=True, fuse=False):
 
 
 def parse_model(d, ch, verbose=True):
-    """将 YOLO model.yaml 字典解析为 PyTorch 模型
+    """
+    将 YOLO model.yaml 字典解析为 PyTorch 模型
 
     参数:
         d (dict): 模型字典
@@ -1686,7 +1686,8 @@ def parse_model(d, ch, verbose=True):
 
 
 def yaml_model_load(path):
-    """从 YAML 文件加载 YOLOv8 模型
+    """
+    从 YAML 文件加载 YOLO 模型
 
     参数:
         path (str | Path): YAML 文件的路径
